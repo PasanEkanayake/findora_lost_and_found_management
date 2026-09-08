@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Findora app icon: white location pin with an amber "found" dot on
+       a teal rounded-square background. Kept to two flat shapes so it
+       stays legible down to 48dp launcher size. -->
+  <rect x="0" y="0" width="200" height="200" rx="44" fill="#0F6E56"/>
+  <path
+    d="M100 58 C76 58 57 77 57 101 C57 131 100 152 100 152 C100 152 143 131 143 101 C143 77 124 58 100 58 Z"
+    fill="#FFFFFF"
+  />
+  <circle cx="100" cy="101" r="19" fill="#E8A33D"/>
+</svg>

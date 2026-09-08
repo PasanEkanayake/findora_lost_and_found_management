@@ -1,0 +1,110 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../supabase/supabase_client.dart';
+import '../widgets/main_shell.dart';
+import '../../features/splash/splash_screen.dart';
+import '../../features/auth/login_screen.dart';
+import '../../features/auth/signup_screen.dart';
+import '../../features/home/item_feed_screen.dart';
+import '../../features/matches/matches_screen.dart';
+import '../../features/chat/chat_list_screen.dart';
+import '../../features/profile/profile_screen.dart';
+import '../../features/items/post_item_screen.dart';
+
+/// Bridges a Stream (Supabase's auth state changes) into the Listenable
+/// that go_router's `refreshListenable` expects, so the router re-evaluates
+/// its `redirect` callback every time someone signs in, signs out, or their
+/// token refreshes — without every screen needing its own subscription.
+class GoRouterRefreshStream extends ChangeNotifier {
+  GoRouterRefreshStream(Stream<dynamic> stream) {
+    notifyListeners();
+    _subscription = stream.asBroadcastStream().listen((_) => notifyListeners());
+  }
+
+  late final StreamSubscription<dynamic> _subscription;
+
+  @override
+  void dispose() {
+    _subscription.cancel();
+    super.dispose();
+  }
+}
+
+/// Exposed as a provider so it can be watched/disposed the Riverpod way,
+/// and so later phases can inject a fake router in tests if needed.
+final appRouterProvider = Provider<GoRouter>((ref) {
+  final router = GoRouter(
+    initialLocation: '/splash',
+    refreshListenable: GoRouterRefreshStream(supabase.auth.onAuthStateChange),
+    redirect: (context, state) {
+      final isLoggedIn = supabase.auth.currentSession != null;
+      final location = state.matchedLocation;
+      final isAuthRoute = location == '/login' || location == '/signup';
+
+      // Let the splash screen's own timer make the very first hop (it
+      // reads currentSession itself) so the logo gets a moment on screen.
+      // The redirect below takes over for every navigation after that,
+      // including a session expiring mid-use.
+      if (location == '/splash') return null;
+
+      if (!isLoggedIn && !isAuthRoute) return '/login';
+      if (isLoggedIn && isAuthRoute) return '/feed';
+      return null;
+    },
+    routes: [
+      GoRoute(path: '/splash', builder: (context, state) => const SplashScreen()),
+      GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
+      GoRoute(path: '/signup', builder: (context, state) => const SignupScreen()),
+      GoRoute(
+        path: '/post-item',
+        builder: (context, state) => const PostItemScreen(),
+      ),
+
+      // Bottom-nav tabs. Each branch keeps its own navigation stack, so
+      // switching tabs and back preserves scroll position/state.
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) {
+          return MainShell(navigationShell: navigationShell);
+        },
+        branches: [
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/feed', builder: (context, state) => const ItemFeedScreen()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/matches',
+                builder: (context, state) => const MatchesScreen(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/chats',
+                builder: (context, state) => const ChatListScreen(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/profile',
+                builder: (context, state) => const ProfileScreen(),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ],
+  );
+
+  ref.onDispose(router.dispose);
+  return router;
+});

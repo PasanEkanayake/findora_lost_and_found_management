@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Just the pin + dot, no square backdrop — for placing directly on
+       a teal background (e.g. the splash screen) where the square from
+       app_icon.svg would blend in. -->
+  <path
+    d="M50 29 C38 29 28.5 38.5 28.5 50.5 C28.5 65.5 50 76 50 76 C50 76 71.5 65.5 71.5 50.5 C71.5 38.5 61 29 50 29 Z"
+    fill="#FFFFFF"
+  />
+  <circle cx="50" cy="50.5" r="9.5" fill="#E8A33D"/>
+</svg>
