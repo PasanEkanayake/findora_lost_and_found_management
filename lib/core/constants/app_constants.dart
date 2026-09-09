@@ -13,6 +13,7 @@ class AppConstants {
   static const String messagesTable = 'messages';
   static const String claimsTable = 'claims';
   static const String reportsTable = 'reports';
+  static const String ratingsTable = 'ratings';
 
   // Postgres RPC functions (see 02_functions_and_triggers.sql)
   static const String matchItemsFunction = 'match_items';

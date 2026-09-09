@@ -12,8 +12,11 @@ import '../../features/auth/signup_screen.dart';
 import '../../features/home/item_feed_screen.dart';
 import '../../features/matches/matches_screen.dart';
 import '../../features/chat/chat_list_screen.dart';
+import '../../features/chat/chat_screen.dart';
 import '../../features/profile/profile_screen.dart';
+import '../../features/items/item_detail_screen.dart';
 import '../../features/items/post_item_screen.dart';
+import '../../features/profile/admin_reports_screen.dart';
 
 /// Bridges a Stream (Supabase's auth state changes) into the Listenable
 /// that go_router's `refreshListenable` expects, so the router re-evaluates
@@ -62,6 +65,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/post-item',
         builder: (context, state) => const PostItemScreen(),
+      ),
+      GoRoute(
+        path: '/chat',
+        builder: (context, state) => ChatScreen(args: state.extra as ChatScreenArgs),
+      ),
+      GoRoute(
+        path: '/item/:id',
+        builder: (context, state) => ItemDetailScreen(itemId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/admin/reports',
+        builder: (context, state) => const AdminReportsScreen(),
       ),
 
       // Bottom-nav tabs. Each branch keeps its own navigation stack, so
