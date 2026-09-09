@@ -1,8 +1,12 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'core/notifications/push_notifications.dart';
+import 'core/providers/auth_providers.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 
@@ -20,15 +24,33 @@ Future<void> main() async {
     publishableKey: dotenv.env['SUPABASE_PUBLISHABLE_KEY']!,
   );
 
-  runApp(const ProviderScope(child: LostAndFoundApp()));
+  // Firebase.initializeApp() with no explicit options works on Android as
+  // long as google-services.json is in place natively — no generated
+  // firebase_options.dart needed for an Android-only app. Wrapped in a
+  // try/catch so skipping Firebase setup degrades to "no push
+  // notifications" instead of the app failing to start.
+  try {
+    await Firebase.initializeApp();
+    await initializePushNotifications();
+  } catch (e) {
+    debugPrint('Push notifications unavailable (Firebase not configured yet): $e');
+  }
+
+  runApp(const ProviderScope(child: FindoraApp()));
 }
 
-class LostAndFoundApp extends ConsumerWidget {
-  const LostAndFoundApp({super.key});
+class FindoraApp extends ConsumerWidget {
+  const FindoraApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(appRouterProvider);
+
+    // Re-registers the push token on every sign-in, not just at cold
+    // start — a token fetched before login has nobody to be saved against.
+    ref.listen(currentUserProvider, (previous, next) {
+      if (next != null) registerPushTokenForCurrentUser();
+    });
 
     return MaterialApp.router(
       title: 'Findora',

@@ -210,13 +210,218 @@ crashing (see `_classifyAllPhotos()`).
    see real predictions on real photos.
 3. Only the embedding, label, and photo get uploaded — never used for
    comparison on-device, since matching needs everyone else's items too.
-4. `match_items()` in Postgres compares the new embedding against all
-   *opposite-type*, *open*, optionally *same-category* items using
-   pgvector's cosine distance operator (`<=>`), returning ranked candidates.
-5. Candidates above a similarity threshold get written to `matches`, which
-   both item owners can see per the RLS policy.
+4. A trigger (`record_matches_for_image`, see Phase 5 below) fires the
+   moment a photo with an embedding is inserted, comparing it against all
+   *opposite-type*, *open*, same-category items using pgvector's cosine
+   distance operator (`<=>`), and writes any candidates above the
+   similarity threshold straight into `matches`.
+5. `MatchesScreen` reads those via `my_matches()`, which resolves each row
+   into "my item" vs "the matched item" from the caller's perspective —
+   both item owners can see the match per the RLS policy, and either can
+   confirm or dismiss it.
 
-## 6. A few things to double-check before Phase 5+
+## The matching engine, end to end (Phase 5)
+
+The pieces built in earlier phases (the `embedding` column, `match_items()`)
+were only half the story — nothing was actually calling that function or
+writing to `matches` yet. Phase 5 closes that loop, entirely at the
+database layer:
+
+- **`record_matches_for_image`**: an `after insert` trigger on
+  `item_images` that runs whenever a row has a non-null `embedding`. It
+  calls `match_items()` for that photo and inserts any results into
+  `matches`, `on conflict do nothing` so re-processing never creates
+  duplicates. This runs as part of the same transaction as the photo
+  insert, so by the time `ItemsRepository.createItem()` returns, any
+  matches already exist — no polling or delay needed.
+- **`match_items()` got one correctness fix**: it now also excludes items
+  posted by the *same user* as the source item, so someone testing with
+  both a "lost" and "found" report of their own doesn't match themselves.
+- **`my_matches()`**: a read function that resolves the ambiguous
+  `item_a_id`/`item_b_id` columns into "my item" vs "the matched item"
+  from `auth.uid()`'s perspective, plus the matched item's title, type,
+  and first photo — one round trip instead of the client doing that join
+  itself.
+- **A new RLS policy**: item owners can now `update` their own matches
+  (only `select` existed before), which is what lets "Not a match" /
+  "This is it!" in the app actually persist.
+
+If you already ran the Phase 1 SQL files against a live project, re-run
+`02_functions_and_triggers.sql` and `03_rls_policies.sql` — both use
+`create or replace function` / `create policy` guarded appropriately, so
+re-running them is safe.
+
+What's still deliberately missing: confirming a match doesn't do anything
+beyond flip its status yet — no chat opens, no contact info is shared.
+That's Phases 7 (messaging) and 8 (claims), which give "confirmed" an
+actual next step.
+
+## Google Maps setup (Phase 6)
+
+The map view in `ItemsMapView` needs a Google Maps API key configured
+natively — it won't render without one, even though the Dart code is
+already correct.
+
+1. Get an API key from Google Cloud Console with the **Maps SDK for
+   Android** enabled.
+2. Add it to `android/app/src/main/AndroidManifest.xml`, inside the
+   `<application>` tag:
+
+   ```xml
+   <meta-data
+       android:name="com.google.android.geo.API_KEY"
+       android:value="YOUR_API_KEY_HERE" />
+   ```
+
+Until this is set up, tapping the map toggle will show a blank or greyed
+map rather than crashing — the widget itself doesn't require the key to
+build, only to render tiles.
+
+## Search, filters, and the map (Phase 6)
+
+- `ItemFeedScreen`'s search box and category chips are no longer client-side
+  filters over an already-fetched list — they're real query parameters.
+  `ItemsRepository.fetchOpenItems()` applies `.eq('category_id', ...)` and
+  an `.or('title.ilike...,description.ilike...')` search server-side, and
+  `itemsFeedProvider` is now a `.family` provider keyed on
+  `ItemsFilter(categoryId, searchQuery)` so Riverpod fetches and caches per
+  filter combination automatically. The search box debounces for 400ms
+  before refetching, so typing doesn't fire a query per keystroke.
+- The map toggle (top-right of the app bar) swaps the list for
+  `ItemsMapView`, which centers on the device's current location (via the
+  same `getCurrentPositionOrNull()` helper the post-item form uses, now
+  shared from `core/location/`) and plots open items within 5km using the
+  `nearby_items()` RPC — red pins for lost, green for found.
+- `nearby_items()` got a shape change: it used to return raw `items` rows,
+  which meant the PostGIS `location` column would serialize unpredictably
+  over PostgREST. It now returns plain `latitude`/`longitude` doubles (via
+  `st_y`/`st_x`) plus category name and first photo, so the client never
+  has to parse a geography value directly. **This changes the function's
+  return type**, so the SQL file drops the old version before recreating
+  it — straightforward if you're re-running against a database that
+  already had Phase 1's version installed.
+- Deliberately out of scope for now: the map view doesn't share the list's
+  category/search filters, and there's no distance or date filter yet
+  beyond the map's fixed 5km radius. Both are natural follow-ups once this
+  is in daily use rather than blind guesses about what filtering people
+  actually want.
+
+## Firebase setup for push notifications (Phase 7)
+
+Push notifications need a real Firebase project — something this sandbox
+can't create. Once you have one:
+
+1. In the Firebase Console, add an Android app with your package name,
+   download `google-services.json`, and place it at
+   `android/app/google-services.json`.
+2. Add the Google Services Gradle plugin — in
+   `android/build.gradle.kts` (project-level):
+   ```kotlin
+   plugins {
+       id("com.google.gms.google-services") version "4.4.2" apply false
+   }
+   ```
+   and in `android/app/build.gradle.kts` (module-level):
+   ```kotlin
+   plugins {
+       id("com.google.gms.google-services")
+   }
+   ```
+3. Add the notification permission to
+   `android/app/src/main/AndroidManifest.xml`:
+   ```xml
+   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+   ```
+
+With that in place, `Firebase.initializeApp()` in `main.dart` — called
+with no explicit options, which works fine for an Android-only app without
+needing a generated `firebase_options.dart` — will succeed, and
+`initializePushNotifications()` requests permission, registers this
+device's FCM token to the signed-in user's `profiles` row, and shows
+foreground messages as local notifications. Skip all of this and the app
+still runs fine; it's wrapped in a try/catch specifically so a missing
+Firebase project degrades to "no push notifications" rather than a crash.
+
+**What's still missing, honestly**: nothing in this codebase actually
+*sends* a push notification when a match or message happens. That's a
+server-side piece — a Supabase Edge Function (calling the FCM HTTP v1 API)
+triggered by a Database Webhook on inserts into `matches`/`messages` —
+which needs a Firebase service account key. That's a real secret this
+sandbox has no way to hold or test against, so it's a natural next step
+to build once you're ready to wire it up rather than something guessed at
+here.
+
+## In-app chat (Phase 7)
+
+- **`messages` changed shape**: it used to be scoped by `item_id`, but a
+  conversation is fundamentally between the two people on either side of
+  a match, not about one item in isolation — so it's now scoped by
+  `match_id`. If you already ran the Phase 1 SQL and have existing message
+  rows, run `truncate table public.messages;` before re-running
+  `01_extensions_and_tables.sql`; there's no production data at stake this
+  early in the build.
+- **Chat is gated behind a confirmed match**, not available the moment a
+  candidate appears — tapping "This is it!" on a match is what makes a
+  "Message" button (and a `ChatListScreen` entry) appear, via the new
+  `my_conversations()` RPC.
+- **Messages use real Supabase Realtime**, unlike the joined queries
+  elsewhere in this app (`itemsFeedProvider`, `matchesProvider`), which
+  refetch rather than stream, since `.stream()` doesn't support embedded
+  joins. A plain message list has no such join, so `ChatScreen` gets live
+  updates via `messagesStreamProvider`, a genuine `StreamProvider`.
+- Marking messages read only touches the *current user's own* incoming
+  messages (enforced by the existing RLS policy, not just app logic), so
+  there's no way to mark the other person's messages as read on their
+  behalf even with a buggy client.
+
+## Claims, trust, and moderation (Phase 8)
+
+This is the last phase in the original roadmap — it closes the loop that
+Phase 5 opened ("confirming a match doesn't do anything beyond flip its
+status yet") and Phase 7 continued (chat, but no next step once you'd
+found the right person).
+
+**The claim → return → rating lifecycle**, all inside `ChatScreen`:
+
+1. Claims are always filed against whichever item in the match has type
+   `'found'` — you claim something someone *found*, to prove you're the
+   one who *lost* it. `ChatScreenArgs.foundItemId` / `.iAmClaimant` work
+   this out from the two items' types so the UI doesn't need to ask.
+2. The claimant writes a verification answer (a detail only the real
+   owner would know) via a "File a claim" button; the finder sees it and
+   can Approve or Reject.
+3. Approving runs a trigger (`handle_claim_approved`) that moves the item
+   to `'claimed'` automatically — the client never writes that status
+   directly, so it can't drift out of sync with the claim's actual state.
+4. Once claimed, the finder gets a "Mark as returned" button, moving the
+   item to `'resolved'`.
+5. Resolving surfaces a star-rating prompt for the other person. Ratings
+   write to a new `ratings` table (one row per return, for an audit
+   trail), and a trigger (`handle_new_rating`) recomputes
+   `profiles.rating`/`rating_count` from it — those columns are a
+   fast-read cache, never written to directly.
+
+All of this state (claim, item status, whether you've already rated) is
+fetched together by `chatLifecycleProvider`, so the banner at the top of
+the chat doesn't flicker through multiple loading states as you scroll.
+
+**A real item detail screen**, which turned out to be a genuine gap
+before this phase — there was no way to see an item's full description,
+every photo, or take any action beyond what the feed card already showed.
+Tapping a card now opens `ItemDetailScreen`, which is also where
+"Report this item" lives (a reason picker that inserts into `reports`).
+
+**Basic moderation**: `profiles.is_admin` gates a "Flagged reports" entry
+in `ProfileScreen`, opening `AdminReportsScreen` — a list of open reports
+with Dismiss / Remove item actions. This is backed by RLS, not just a
+hidden UI element: the "admins can view all reports" and "admins can
+delete any item" policies mean a non-admin who somehow navigated there
+would just see an empty list. There's no UI to grant someone admin —
+that's a one-off `update profiles set is_admin = true where id = '...';`
+in the Supabase SQL editor for now, which is reasonable for a single
+trusted moderator and a natural thing to build a proper flow around later.
+
+## 9. A few things to double-check before shipping
 
 - **Package versions**: everything in `pubspec.yaml` was current as of the
   research done alongside this scaffold, but this ecosystem moves fast —
@@ -232,11 +437,19 @@ crashing (see `_classifyAllPhotos()`).
   common case because a JSON array's text form matches pgvector's own
   input format, but it's untested against a live project in this sandbox
   — verify it once you have a real device, model, and Supabase project.
-- **Google Maps**: `google_maps_flutter` needs an API key added to
-  `android/app/src/main/AndroidManifest.xml` (and the iOS equivalent) —
-  see the package's own setup docs, which change per platform.
-- **Firebase**: `firebase_messaging` needs a Firebase project and one run
-  of `flutterfire configure`, which generates `firebase_options.dart`.
+- **Google Maps**: needs an API key in the Android manifest — see the
+  "Google Maps setup" section above.
+- **Firebase**: needs a real project and `google-services.json` — see the
+  "Firebase setup for push notifications" section above. No push is
+  actually *sent* yet without an Edge Function; that's flagged there too.
+- **Ratings aren't tightly restricted**: the RLS policy lets any signed-in
+  user insert a rating as themselves, not strictly only for an item they
+  actually completed a return on — the app only ever shows the rating
+  dialog after "mark as returned", so this is a reasonable trust boundary
+  for a first version, not a hard guarantee worth over-engineering yet.
+- **Granting admin access**: there's no in-app flow for it — run
+  `update public.profiles set is_admin = true where id = '<user-uuid>';`
+  in the Supabase SQL editor for your first moderator.
 
 ## Project structure
 
@@ -249,17 +462,29 @@ lib/
     providers/      currentUserProvider, authStateChangesProvider
     supabase/       shared Supabase client accessor
     ml/             TfliteClassifier, its provider, category_mapper
+    location/       shared getCurrentPositionOrNull() helper
+    notifications/  FCM setup + push token registration
     widgets/        MainShell (bottom nav + FAB)
   features/
     splash/         shows the pin glyph on brand teal
     auth/           login, signup, forgot-password — wired to Supabase Auth
-    home/           the browse/feed tab, reading real items from Supabase
+    home/           browse tab: real search/filters, plus items_map_view.dart
     items/
-      data/          CategoryModel, ItemModel, ItemsRepository, providers
+      data/          CategoryModel, ItemModel, NearbyItemModel, ClaimModel,
+                      ItemsRepository, ClaimsRepository, providers
       post_item_screen.dart   photo picking, location, AI tagging, upload
-    matches/        AI-suggested matches tab (empty state for now)
-    chat/           messaging tab (empty state for now)
-    profile/        account screen, shows the real signed-in user
+      item_detail_screen.dart  full detail, photo gallery, report action
+    matches/
+      data/          MatchModel, MatchesRepository, providers
+      matches_screen.dart   real matches, confirm/dismiss, message action
+    chat/
+      data/          ConversationModel, MessageModel, MessagesRepository
+      chat_list_screen.dart   real conversations, unread badges
+      chat_screen.dart        live messages + claim/return/rate lifecycle
+    profile/
+      data/          ProfileModel, AdminRepository, ReportModel, providers
+      profile_screen.dart      real rating, conditional admin entry
+      admin_reports_screen.dart  moderation: dismiss / remove item
 supabase/
   01_extensions_and_tables.sql
   02_functions_and_triggers.sql

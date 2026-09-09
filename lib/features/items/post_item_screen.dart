@@ -4,13 +4,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/location/current_location.dart';
 import '../../core/ml/category_mapper.dart';
 import '../../core/ml/tflite_classifier.dart';
 import '../../core/ml/tflite_provider.dart';
+import '../matches/data/matches_providers.dart';
 import 'data/items_providers.dart';
 
 /// Reporting form. Photos are classified on-device twice, deliberately:
@@ -136,22 +137,15 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
   Future<void> _detectLocation() async {
     setState(() => _isLocating = true);
     try {
-      if (!await Geolocator.isLocationServiceEnabled()) {
-        _showMessage('Turn on location services to add a location.');
+      final position = await getCurrentPositionOrNull();
+      if (position == null) {
+        _showMessage(
+          'Could not get your location. Check permissions and try again.',
+          isError: true,
+        );
         return;
       }
 
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        _showMessage('Location permission was denied.', isError: true);
-        return;
-      }
-
-      final position = await Geolocator.getCurrentPosition();
       String label = 'Pinned location';
       try {
         final placemarks = await placemarkFromCoordinates(
@@ -175,8 +169,6 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
         _longitude = position.longitude;
         _locationLabel = label;
       });
-    } catch (_) {
-      _showMessage('Could not get your location. Try again.', isError: true);
     } finally {
       if (mounted) setState(() => _isLocating = false);
     }
@@ -234,6 +226,9 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
 
       if (!mounted) return;
       ref.invalidate(itemsFeedProvider);
+      // The record_matches_for_image trigger runs synchronously as part of
+      // the item_images insert above, so any matches already exist by now.
+      ref.invalidate(matchesProvider);
       context.pop();
     } catch (_) {
       _showMessage(

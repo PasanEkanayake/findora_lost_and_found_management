@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/providers/auth_providers.dart';
 import '../../core/supabase/supabase_client.dart';
+import 'data/profile_providers.dart';
 
-/// Account screen. The header now reflects the real signed-in user via
-/// [currentUserProvider]; the rest of the profile data (rating, avatar)
-/// still waits on Phase 3's `profiles` table wiring.
+/// Account screen. The header reflects the real signed-in user and their
+/// actual rating (from the `ratings` table via `profiles.rating`, kept in
+/// sync by a trigger — see Phase 8 in the README). The admin entry only
+/// renders for profiles.is_admin — RLS backs that up server-side too.
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
@@ -14,6 +17,7 @@ class ProfileScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final user = ref.watch(currentUserProvider);
+    final profileAsync = ref.watch(myProfileProvider);
     final displayName =
         (user?.userMetadata?['username'] as String?) ?? user?.email ?? 'Your name';
 
@@ -42,18 +46,27 @@ class ProfileScreen extends ConsumerWidget {
                     children: [
                       Text(displayName, style: theme.textTheme.titleLarge),
                       const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(Icons.star_rounded,
-                              size: 16, color: theme.colorScheme.secondary),
-                          const SizedBox(width: 4),
-                          Text(
-                            'No ratings yet',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
+                      profileAsync.when(
+                        loading: () => Text('Loading…',
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                        error: (_, __) => const SizedBox.shrink(),
+                        data: (profile) => Row(
+                          children: [
+                            Icon(Icons.star_rounded,
+                                size: 16, color: theme.colorScheme.secondary),
+                            const SizedBox(width: 4),
+                            Text(
+                              profile.ratingCount == 0
+                                  ? 'No ratings yet'
+                                  : '${profile.rating.toStringAsFixed(1)} '
+                                      '(${profile.ratingCount} review${profile.ratingCount == 1 ? '' : 's'})',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -85,6 +98,18 @@ class ProfileScreen extends ConsumerWidget {
             title: const Text('Help & support'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {},
+          ),
+          profileAsync.maybeWhen(
+            data: (profile) => profile.isAdmin
+                ? ListTile(
+                    leading: Icon(Icons.admin_panel_settings_outlined,
+                        color: theme.colorScheme.primary),
+                    title: const Text('Flagged reports'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/admin/reports'),
+                  )
+                : const SizedBox.shrink(),
+            orElse: () => const SizedBox.shrink(),
           ),
           const Divider(height: 32),
           ListTile(
