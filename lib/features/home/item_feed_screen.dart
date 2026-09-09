@@ -1,15 +1,18 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import 'items_map_view.dart';
+import '../items/data/category_model.dart';
 import '../items/data/item_model.dart';
 import '../items/data/items_providers.dart';
 
-/// The main "Browse" tab, now reading real rows from Supabase via
-/// [itemsFeedProvider] instead of hard-coded demo data. Filtering is still
-/// done client-side over the fetched list — Phase 5 is where this becomes
-/// a proper server-side search/filter query as the dataset grows.
+/// The main "Browse" tab: a real Supabase-backed list with server-side
+/// category/keyword filtering, plus a map view toggled from the app bar.
 class ItemFeedScreen extends ConsumerStatefulWidget {
   const ItemFeedScreen({super.key});
 
@@ -18,44 +21,53 @@ class ItemFeedScreen extends ConsumerStatefulWidget {
 }
 
 class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
-  String _selectedCategory = 'All';
+  String? _selectedCategoryId;
   String _query = '';
+  bool _isMapView = false;
+  Timer? _debounce;
 
-  List<ItemModel> _filter(List<ItemModel> items) {
-    return items.where((item) {
-      final matchesCategory =
-          _selectedCategory == 'All' || item.categoryName == _selectedCategory;
-      final matchesQuery = _query.isEmpty ||
-          item.title.toLowerCase().contains(_query.toLowerCase()) ||
-          (item.description?.toLowerCase().contains(_query.toLowerCase()) ?? false) ||
-          (item.locationLabel?.toLowerCase().contains(_query.toLowerCase()) ?? false);
-      return matchesCategory && matchesQuery;
-    }).toList();
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      setState(() => _query = value);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final itemsAsync = ref.watch(itemsFeedProvider);
+    final filter = ItemsFilter(categoryId: _selectedCategoryId, searchQuery: _query);
     final categoriesAsync = ref.watch(categoriesProvider);
-    final categoryNames = [
-      'All',
-      ...categoriesAsync.maybeWhen(
-        data: (categories) => categories.map((c) => c.name),
-        orElse: () => const <String>[],
-      ),
-    ];
+
+    final toggleButton = IconButton(
+      icon: Icon(_isMapView ? Icons.list_outlined : Icons.map_outlined),
+      tooltip: _isMapView ? 'Show list' : 'Show map',
+      onPressed: () => setState(() => _isMapView = !_isMapView),
+    );
+
+    if (_isMapView) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Findora'), actions: [toggleButton]),
+        body: const ItemsMapView(),
+      );
+    }
+
+    final itemsAsync = ref.watch(itemsFeedProvider(filter));
 
     return Scaffold(
       body: RefreshIndicator(
-        onRefresh: () => ref.refresh(itemsFeedProvider.future),
+        onRefresh: () => ref.refresh(itemsFeedProvider(filter).future),
         child: CustomScrollView(
           slivers: [
             SliverAppBar.large(
               title: const Text('Findora'),
-              actions: [
-                IconButton(icon: const Icon(Icons.tune_outlined), onPressed: () {}),
-              ],
+              actions: [toggleButton],
               bottom: PreferredSize(
                 preferredSize: const Size.fromHeight(112),
                 child: Padding(
@@ -63,7 +75,7 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                   child: Column(
                     children: [
                       TextField(
-                        onChanged: (value) => setState(() => _query = value),
+                        onChanged: _onSearchChanged,
                         decoration: InputDecoration(
                           hintText: 'Search by item, place, or keyword',
                           prefixIcon: const Icon(Icons.search),
@@ -73,20 +85,14 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                       const SizedBox(height: 12),
                       SizedBox(
                         height: 36,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: categoryNames.length,
-                          separatorBuilder: (_, __) => const SizedBox(width: 8),
-                          itemBuilder: (context, index) {
-                            final category = categoryNames[index];
-                            final selected = category == _selectedCategory;
-                            return ChoiceChip(
-                              label: Text(category),
-                              selected: selected,
-                              onSelected: (_) =>
-                                  setState(() => _selectedCategory = category),
-                            );
-                          },
+                        child: categoriesAsync.when(
+                          loading: () => const SizedBox.shrink(),
+                          error: (_, __) => const SizedBox.shrink(),
+                          data: (categories) => _CategoryChipRow(
+                            categories: categories,
+                            selectedId: _selectedCategoryId,
+                            onSelect: (id) => setState(() => _selectedCategoryId = id),
+                          ),
                         ),
                       ),
                     ],
@@ -106,13 +112,12 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                 ),
               ),
               data: (items) {
-                final filtered = _filter(items);
-                if (filtered.isEmpty) {
+                if (items.isEmpty) {
                   return SliverFillRemaining(
                     child: _FeedMessage(
                       icon: Icons.search_off,
                       title: 'Nothing here yet',
-                      body: items.isEmpty
+                      body: (_selectedCategoryId == null && _query.isEmpty)
                           ? 'Be the first to report a lost or found item.'
                           : 'Try a different search or category.',
                     ),
@@ -121,9 +126,9 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                 return SliverPadding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
                   sliver: SliverList.separated(
-                    itemCount: filtered.length,
+                    itemCount: items.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
-                    itemBuilder: (context, index) => _ItemCard(item: filtered[index]),
+                    itemBuilder: (context, index) => _ItemCard(item: items[index]),
                   ),
                 );
               },
@@ -131,6 +136,44 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _CategoryChipRow extends StatelessWidget {
+  const _CategoryChipRow({
+    required this.categories,
+    required this.selectedId,
+    required this.onSelect,
+  });
+
+  final List<CategoryModel> categories;
+  final String? selectedId;
+  final ValueChanged<String?> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      scrollDirection: Axis.horizontal,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: ChoiceChip(
+            label: const Text('All'),
+            selected: selectedId == null,
+            onSelected: (_) => onSelect(null),
+          ),
+        ),
+        for (final category in categories)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ChoiceChip(
+              label: Text(category.name),
+              selected: selectedId == category.id,
+              onSelected: (_) => onSelect(category.id),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -180,14 +223,16 @@ class _ItemCard extends StatelessWidget {
 
     return Card(
       clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: SizedBox(
+      child: InkWell(
+        onTap: () => context.push('/item/${item.id}'),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
                 width: 64,
                 height: 64,
                 child: item.imageUrls.isEmpty
@@ -257,6 +302,7 @@ class _ItemCard extends StatelessWidget {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

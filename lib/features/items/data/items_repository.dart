@@ -7,6 +7,7 @@ import '../../../core/ml/tflite_classifier.dart';
 import '../../../core/supabase/supabase_client.dart';
 import 'category_model.dart';
 import 'item_model.dart';
+import 'nearby_item_model.dart';
 
 /// Data access for everything under `items`/`item_images`/`categories`.
 class ItemsRepository {
@@ -20,13 +21,63 @@ class ItemsRepository {
     return rows.map(CategoryModel.fromMap).toList();
   }
 
-  Future<List<ItemModel>> fetchOpenItems() async {
-    final rows = await supabase
+  /// [categoryId] and [searchQuery] are applied server-side rather than by
+  /// filtering the fetched list in Dart, so this scales past however many
+  /// items fit comfortably in memory on a phone.
+  Future<List<ItemModel>> fetchOpenItems({String? categoryId, String? searchQuery}) async {
+    var query = supabase
         .from(AppConstants.itemsTable)
         .select('*, categories(name), item_images(image_url)')
-        .eq('status', 'open')
-        .order('created_at', ascending: false);
+        .eq('status', 'open');
+
+    if (categoryId != null) {
+      query = query.eq('category_id', categoryId);
+    }
+    final term = searchQuery?.trim();
+    if (term != null && term.isNotEmpty) {
+      query = query.or('title.ilike.%$term%,description.ilike.%$term%');
+    }
+
+    final rows = await query.order('created_at', ascending: false);
     return rows.map(ItemModel.fromMap).toList();
+  }
+
+  /// Calls the `nearby_items()` RPC for the map view — a PostGIS radius
+  /// search, not the same query as [fetchOpenItems] (which has no location
+  /// filter at all).
+  Future<List<NearbyItemModel>> fetchNearbyItems({
+    required double latitude,
+    required double longitude,
+    int radiusMeters = 5000,
+  }) async {
+    final rows = await supabase.rpc(
+      AppConstants.nearbyItemsFunction,
+      params: {
+        'center_lat': latitude,
+        'center_lng': longitude,
+        'radius_meters': radiusMeters,
+      },
+    );
+    return (rows as List<dynamic>)
+        .map((row) => NearbyItemModel.fromMap(row as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ItemModel> fetchItemById(String id) async {
+    final row = await supabase
+        .from(AppConstants.itemsTable)
+        .select('*, categories(name), item_images(image_url)')
+        .eq('id', id)
+        .single();
+    return ItemModel.fromMap(row);
+  }
+
+  Future<void> fileReport({required String itemId, required String reason}) async {
+    await supabase.from(AppConstants.reportsTable).insert({
+      'item_id': itemId,
+      'reporter_id': supabase.auth.currentUser!.id,
+      'reason': reason,
+    });
   }
 
   /// Inserts the `items` row, uploads each photo to Storage under
