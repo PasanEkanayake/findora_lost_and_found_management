@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/supabase/supabase_client.dart';
-import '../items/data/claim_model.dart';
 import '../items/data/claims_providers.dart';
 import 'data/message_model.dart';
 import 'data/messages_providers.dart';
@@ -170,12 +169,6 @@ class _LifecycleBanner extends ConsumerWidget {
 
   final ChatScreenArgs args;
   final ChatLifecycleStatus status;
-
-  ChatLifecycleParams _params(String? myId) => ChatLifecycleParams(
-        foundItemId: args.foundItemId,
-        claimantId: args.iAmClaimant ? (myId ?? '') : args.otherUserId,
-        myId: myId ?? '',
-      );
 
   Future<void> _fileClaim(BuildContext context, WidgetRef ref) async {
     final controller = TextEditingController();

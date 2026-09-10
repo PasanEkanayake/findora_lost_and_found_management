@@ -24,7 +24,7 @@ Future<void> initializePushNotifications() async {
   await messaging.requestPermission();
 
   await _localNotifications.initialize(
-    const InitializationSettings(
+    settings: const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     ),
   );
@@ -33,10 +33,10 @@ Future<void> initializePushNotifications() async {
     final notification = message.notification;
     if (notification == null) return;
     _localNotifications.show(
-      notification.hashCode,
-      notification.title,
-      notification.body,
-      const NotificationDetails(
+      id: notification.hashCode,
+      title: notification.title,
+      body: notification.body,
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           'findora_default',
           'Findora notifications',

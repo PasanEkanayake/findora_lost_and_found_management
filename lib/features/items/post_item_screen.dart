@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart';
@@ -148,7 +147,9 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
 
       String label = 'Pinned location';
       try {
-        final placemarks = await placemarkFromCoordinates(
+        // geocoding 5.x replaced the old top-level placemarkFromCoordinates()
+        // function with an instance method on the Geocoding class.
+        final placemarks = await Geocoding().placemarkFromCoordinates(
           position.latitude,
           position.longitude,
         );

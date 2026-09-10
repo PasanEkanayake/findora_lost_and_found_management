@@ -18,8 +18,6 @@ class ItemsMapView extends ConsumerStatefulWidget {
 }
 
 class _ItemsMapViewState extends ConsumerState<ItemsMapView> {
-  static const _radiusMeters = 5000;
-
   MapCenter? _center;
   bool _isLocating = true;
 

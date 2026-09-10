@@ -51,18 +51,20 @@ class ItemDetailScreen extends ConsumerWidget {
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setState) => AlertDialog(
           title: const Text('Report this item'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final reason in reasons)
-                RadioListTile<String>(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(reason),
-                  value: reason,
-                  groupValue: selected,
-                  onChanged: (value) => setState(() => selected = value!),
-                ),
-            ],
+          content: RadioGroup<String>(
+            groupValue: selected,
+            onChanged: (value) => setState(() => selected = value!),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final reason in reasons)
+                  RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(reason),
+                    value: reason,
+                  ),
+              ],
+            ),
           ),
           actions: [
             TextButton(

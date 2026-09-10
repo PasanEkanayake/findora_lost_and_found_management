@@ -9,10 +9,22 @@ environment:
   sdk: '>=3.4.0 <4.0.0'
 
 # NOTE ON VERSIONS
-# These were current as of research done alongside this scaffold (Sept 2026)
-# but the Flutter/Dart package ecosystem moves fast. Before your first
-# `flutter pub get`, run `flutter pub outdated` and bump anything stale.
-# The TFLite entry in particular needs a manual check — see README.md.
+# These have been bumped to the newer majors available as of this check
+# (flutter_riverpod 3.x, go_router 18.x, flutter_local_notifications 22.x,
+# geocoding 5.x, and others). Three required source changes to keep working,
+# all already applied in this codebase:
+#   - geocoding 5.x replaced the top-level placemarkFromCoordinates()
+#     function with an instance method (Geocoding().placemarkFromCoordinates)
+#     — see post_item_screen.dart.
+#   - flutter_local_notifications 22.x requires core library desugaring,
+#     Java 17, and minSdk 24+ on Android — see android/app/build.gradle.kts
+#     and README.md's "Troubleshooting Gradle errors" section.
+#   - flutter_local_notifications 22.x also changed initialize() and show()
+#     to take named parameters (settings:, id:/title:/body:/notificationDetails:)
+#     instead of positional ones — see core/notifications/push_notifications.dart.
+#   - RadioListTile.groupValue/onChanged are deprecated in favor of a
+#     RadioGroup ancestor widget (Flutter 3.35+) — see item_detail_screen.dart.
+# The TFLite entry still needs a manual check — see README.md.
 dependencies:
   flutter:
     sdk: flutter
