@@ -334,6 +334,51 @@ for the current state of the migration before deciding how far back to
 go — plugin authors are actively updating, so this may resolve itself
 with a `flutter pub upgrade` in the near future without downgrading at all.
 
+### "Out of memory" / `allocation.cc: error: Out of memory` during the build
+
+If the crash trace mentions `kernel_snapshot_program` or points into the
+Dart VM's own allocation code, this is happening in the **Dart compiler
+running on your development machine**, not the Android device — the
+device name in the "Launching..." line is a red herring here. It means
+your PC ran out of available RAM while compiling the app, usually from
+too much running at once: the Gradle daemon (which by default reserves a
+large heap — already turned down in this project's `gradle.properties`
+from 8GB to 3GB), a separate Kotlin daemon, the Dart compiler itself, and
+whatever else is open (Android Studio, browser tabs, VS Code extensions).
+
+If you hit this:
+1. Stop any lingering Gradle/Kotlin daemons before retrying — repeated
+   failed builds can leave several idling in memory simultaneously:
+   ```bash
+   cd android
+   ./gradlew --stop          # on Windows: gradlew.bat --stop
+   cd ..
+   ```
+2. Close other memory-heavy applications (Android Studio if it's open
+   separately, browser windows, etc.) before running `flutter run` again.
+3. If it still happens on a machine with 16GB or less, the `-Xmx3G` in
+   `gradle.properties` can be turned down further (e.g. `-Xmx2G`) — Gradle
+   will just run a bit slower, which is a better trade than failing outright.
+
+### "Inconsistent JVM Target Compatibility Between Java and Kotlin Tasks"
+
+This shows up as something like:
+```
+Inconsistent JVM-target compatibility detected for tasks 'compileDebugJavaWithJavac' (11) and 'compileDebugKotlin' (21).
+```
+for a specific plugin (`tflite_flutter` and others are known to hit this).
+It means that plugin's own bundled Android build config — which lives in
+the pub cache, not this project, so it can't be edited directly — sets a
+Java target that doesn't match the Kotlin target Gradle resolves for it.
+
+This project's root `android/build.gradle.kts` already has a `subprojects`
+block that forces every module, including third-party plugin modules, onto
+Java/Kotlin target 17 uniformly, which is the standard fix for this class
+of error. If you added a new plugin and hit this again, no action should
+be needed — the override already applies build-wide — but if it somehow
+persists, a `flutter clean` followed by a rebuild clears any stale
+per-module build cache that might be masking the fix taking effect.
+
 ### "Dependency ':flutter_local_notifications' requires core library desugaring to be enabled"
 
 This is already fixed in this project's `android/app/build.gradle.kts`
