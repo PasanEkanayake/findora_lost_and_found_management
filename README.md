@@ -371,13 +371,37 @@ It means that plugin's own bundled Android build config — which lives in
 the pub cache, not this project, so it can't be edited directly — sets a
 Java target that doesn't match the Kotlin target Gradle resolves for it.
 
-This project's root `android/build.gradle.kts` already has a `subprojects`
-block that forces every module, including third-party plugin modules, onto
-Java/Kotlin target 17 uniformly, which is the standard fix for this class
-of error. If you added a new plugin and hit this again, no action should
-be needed — the override already applies build-wide — but if it somehow
-persists, a `flutter clean` followed by a rebuild clears any stale
-per-module build cache that might be masking the fix taking effect.
+This project's root `android/build.gradle.kts` fixes this by reading
+each module's own Java target (set by that plugin's own build file,
+never touched by this project) and pointing that module's Kotlin target
+at the same value — via a `gradle.taskGraph.whenReady` hook, since that's
+the only point at which every module's configuration (including AGP's
+own internal wiring) is guaranteed to have already finished.
+
+This took three attempts to get right, and it's worth knowing the
+history in case you ever touch this block:
+1. A plain `subprojects { tasks.withType<JavaCompile>().configureEach {} }`
+   only partially worked — it fixed Kotlin but not Java, since AGP sets
+   each plugin's own `compileOptions` on its `JavaCompile` task during
+   that plugin's own configuration, which can run *after* an ordinary
+   configuration block's action fires.
+2. Forcing `JavaCompile`'s `sourceCompatibility`/`targetCompatibility` to
+   17 directly via `taskGraph.whenReady` did fix the mismatch, but broke
+   something worse: it interfered with AGP's own classpath wiring for
+   that task, and `android.jar` (Android's own SDK classes) silently
+   vanished from the compile classpath entirely — surfacing as
+   `package android.app does not exist` and similar errors for basic
+   Android classes, for a module that had nothing wrong with its actual
+   code.
+3. The current version never touches `JavaCompile` at all — it only
+   *reads* each module's already-correct Java target and aligns Kotlin
+   to match it, leaving AGP's classpath wiring completely undisturbed.
+
+If you add a new plugin and hit this again, no action should be needed —
+the override reads each module's target dynamically rather than assuming
+a fixed value. If it somehow persists, a `flutter clean` followed by a
+rebuild clears any stale per-module build cache that might be masking
+the fix taking effect.
 
 ### "Dependency ':flutter_local_notifications' requires core library desugaring to be enabled"
 
