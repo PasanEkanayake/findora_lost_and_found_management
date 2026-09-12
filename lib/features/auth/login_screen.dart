@@ -51,7 +51,11 @@ class _LoginScreenState extends State<LoginScreen> {
         password: _passwordController.text,
       );
     } on AuthException catch (e) {
-      _showMessage(e.message, isError: true);
+      if (_isEmailNotConfirmedError(e)) {
+        _showEmailNotConfirmedMessage();
+      } else {
+        _showMessage(e.message, isError: true);
+      }
     } catch (_) {
       _showMessage(
         'Something went wrong. Check your connection and try again.',
@@ -59,6 +63,52 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  /// Matched on the message text rather than a specific error code, since
+  /// that's stable across supabase_flutter versions — this is a standard
+  /// GoTrue response whenever "Confirm email" is enabled for the project
+  /// (Supabase Dashboard → Authentication → Providers → Email) and the
+  /// account hasn't clicked the link yet. It isn't a bug in the app; it's
+  /// the intended behavior of that setting.
+  bool _isEmailNotConfirmedError(AuthException e) {
+    return e.message.toLowerCase().contains('email not confirmed') ||
+        e.message.toLowerCase().contains('email_not_confirmed');
+  }
+
+  void _showEmailNotConfirmedMessage() {
+    if (!mounted) return;
+    final theme = Theme.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          "Your email isn't confirmed yet. Check your inbox (and spam "
+          'folder) for the link, or resend it.',
+        ),
+        backgroundColor: theme.colorScheme.error,
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Resend',
+          onPressed: _resendConfirmationEmail,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _resendConfirmationEmail() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) {
+      _showMessage('Enter your email above first, then try resending.');
+      return;
+    }
+    try {
+      await supabase.auth.resend(type: OtpType.signup, email: email);
+      _showMessage('Confirmation email resent to $email.');
+    } on AuthException catch (e) {
+      _showMessage(e.message, isError: true);
+    } catch (_) {
+      _showMessage('Could not resend the email. Try again.', isError: true);
     }
   }
 

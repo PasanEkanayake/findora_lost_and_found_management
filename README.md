@@ -530,6 +530,22 @@ button will just fail gracefully with an error message.
 
 ## Auth state and routing (Phase 2)
 
+**Profile data fix**: the signup form's "Full name" field used to be sent
+as `username` — a column that had a `unique` constraint. Two users
+signing up with the same name would make the *second* signup fail
+outright with a database constraint violation, since the
+`handle_new_user` trigger runs inside the same transaction as account
+creation. Fixed by: dropping the unique constraint (there's no "pick a
+unique handle" UX in this app, so it was never enforceable correctly
+anyway), having signup send `full_name` instead, and having the trigger
+derive `username` safely from the email prefix instead of user input.
+`ProfileScreen` now reads the display name from the `profiles` table
+(`full_name`, falling back to `username`, then email) instead of reading
+raw Supabase Auth metadata directly, consistent with how rating and admin
+status are already sourced. If you already ran `01_extensions_and_tables.sql`
+and `02_functions_and_triggers.sql` before this fix, just re-run both —
+both changes are written to be safely re-run.
+
 `core/router/app_router.dart` gates navigation for real:
 
 - `GoRouterRefreshStream` turns `supabase.auth.onAuthStateChange` into

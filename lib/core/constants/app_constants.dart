@@ -28,18 +28,4 @@ class AppConstants {
       'assets/models/mobilenet_v2_embedder.tflite';
   static const String tfliteLabelsAsset = 'assets/models/imagenet_labels.txt';
   static const int embeddingDimension = 1280;
-
-  // Default categories, kept in sync with the seed data in
-  // 01_extensions_and_tables.sql so the post-item form always has options
-  // even before the categories table finishes loading.
-  static const List<String> defaultCategories = [
-    'Electronics',
-    'Bags',
-    'Pets',
-    'Documents',
-    'Keys',
-    'Jewelry',
-    'Clothing',
-    'Other',
-  ];
 }

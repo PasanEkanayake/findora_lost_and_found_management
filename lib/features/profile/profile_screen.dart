@@ -18,8 +18,6 @@ class ProfileScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final user = ref.watch(currentUserProvider);
     final profileAsync = ref.watch(myProfileProvider);
-    final displayName =
-        (user?.userMetadata?['username'] as String?) ?? user?.email ?? 'Your name';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Profile')),
@@ -41,34 +39,53 @@ class ProfileScreen extends ConsumerWidget {
                 ),
                 const SizedBox(width: 16),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(displayName, style: theme.textTheme.titleLarge),
-                      const SizedBox(height: 4),
-                      profileAsync.when(
-                        loading: () => Text('Loading…',
-                            style: theme.textTheme.bodySmall
-                                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                        error: (_, __) => const SizedBox.shrink(),
-                        data: (profile) => Row(
-                          children: [
-                            Icon(Icons.star_rounded,
-                                size: 16, color: theme.colorScheme.secondary),
-                            const SizedBox(width: 4),
-                            Text(
-                              profile.ratingCount == 0
-                                  ? 'No ratings yet'
-                                  : '${profile.rating.toStringAsFixed(1)} '
-                                      '(${profile.ratingCount} review${profile.ratingCount == 1 ? '' : 's'})',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
+                  child: profileAsync.when(
+                    loading: () => Text(
+                      'Loading…',
+                      style: theme.textTheme.titleLarge,
+                    ),
+                    // Falls back to the auth user's email directly, rather
+                    // than showing nothing, if the profiles row somehow
+                    // can't be fetched.
+                    error: (_, __) => Text(
+                      user?.email ?? 'Your name',
+                      style: theme.textTheme.titleLarge,
+                    ),
+                    data: (profile) {
+                      // full_name is what the signup form actually
+                      // collects (see signup_screen.dart); username is
+                      // just an email-derived fallback set by the
+                      // handle_new_user trigger, never chosen by the user.
+                      final hasFullName = profile.fullName?.trim().isNotEmpty ?? false;
+                      final displayName = hasFullName
+                          ? profile.fullName!
+                          : (profile.username ?? user?.email ?? 'Your name');
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(displayName, style: theme.textTheme.titleLarge),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(Icons.star_rounded,
+                                  size: 16, color: theme.colorScheme.secondary),
+                              const SizedBox(width: 4),
+                              Text(
+                                profile.ratingCount == 0
+                                    ? 'No ratings yet'
+                                    : '${profile.rating.toStringAsFixed(1)} '
+                                        '(${profile.ratingCount} review${profile.ratingCount == 1 ? '' : 's'})',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                            ],
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ],

@@ -4,7 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/supabase/supabase_client.dart';
 
-/// Account creation. `signUp()` passes `username` in `data`, which the
+/// Account creation. `signUp()` passes `full_name` in `data`, which the
 /// `handle_new_user` trigger (see supabase/02_functions_and_triggers.sql)
 /// reads when it creates the matching `profiles` row.
 class SignupScreen extends StatefulWidget {
@@ -50,7 +50,7 @@ class _SignupScreenState extends State<SignupScreen> {
       final response = await supabase.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,
-        data: {'username': _nameController.text.trim()},
+        data: {'full_name': _nameController.text.trim()},
       );
 
       if (!mounted) return;

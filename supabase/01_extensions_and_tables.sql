@@ -15,7 +15,7 @@ create extension if not exists postgis;
 -- ----------------------------------------------------------------------------
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
-  username text unique,
+  username text,
   full_name text,
   avatar_url text,
   phone text,
@@ -25,6 +25,15 @@ create table if not exists public.profiles (
   is_admin boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+-- `username` was originally declared `unique`, on the assumption the app
+-- would eventually have users pick a distinct handle. It never got that
+-- UX — signup only ever collects a free-text display name — so the
+-- unique constraint was actively breaking signups: two people named
+-- "John Smith" would make the *second* signup fail with a constraint
+-- violation inside the same transaction as their account creation. Drop
+-- it; `username` is just a display fallback now, not a unique handle.
+alter table public.profiles drop constraint if exists profiles_username_key;
 
 -- Phase 7/8 additions — no-ops on a fresh install, only matter if you ran
 -- this file earlier.
