@@ -13,7 +13,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:label="findora"
+        android:label="Findora"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
@@ -71,6 +71,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Lets url_launcher's canLaunchUrl/launchUrl find an email app
+             for the mailto: link in Help & Support — required on Android
+             11+ due to package visibility restrictions. -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
         </intent>
     </queries>
 </manifest>
