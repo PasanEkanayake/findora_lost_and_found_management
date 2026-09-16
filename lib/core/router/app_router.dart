@@ -17,6 +17,11 @@ import '../../features/profile/profile_screen.dart';
 import '../../features/items/item_detail_screen.dart';
 import '../../features/items/post_item_screen.dart';
 import '../../features/profile/admin_reports_screen.dart';
+import '../../features/profile/edit_profile_screen.dart';
+import '../../features/profile/my_items_screen.dart';
+import '../../features/profile/notification_settings_screen.dart';
+import '../../features/profile/privacy_safety_screen.dart';
+import '../../features/profile/help_support_screen.dart';
 
 /// Bridges a Stream (Supabase's auth state changes) into the Listenable
 /// that go_router's `refreshListenable` expects, so the router re-evaluates
@@ -77,6 +82,26 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/admin/reports',
         builder: (context, state) => const AdminReportsScreen(),
+      ),
+      GoRoute(
+        path: '/profile/edit',
+        builder: (context, state) => const EditProfileScreen(),
+      ),
+      GoRoute(
+        path: '/profile/my-items',
+        builder: (context, state) => const MyItemsScreen(),
+      ),
+      GoRoute(
+        path: '/profile/notifications',
+        builder: (context, state) => const NotificationSettingsScreen(),
+      ),
+      GoRoute(
+        path: '/profile/privacy-safety',
+        builder: (context, state) => const PrivacySafetyScreen(),
+      ),
+      GoRoute(
+        path: '/profile/help',
+        builder: (context, state) => const HelpSupportScreen(),
       ),
 
       // Bottom-nav tabs. Each branch keeps its own navigation stack, so
