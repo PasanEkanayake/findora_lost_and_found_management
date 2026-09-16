@@ -74,3 +74,13 @@ Future<void> _saveToken(String token) async {
   if (userId == null) return;
   await supabase.from(AppConstants.profilesTable).update({'fcm_token': token}).eq('id', userId);
 }
+
+/// Clears this user's stored FCM token — used by the "push notifications"
+/// toggle in NotificationSettingsScreen. Doesn't revoke the OS-level
+/// permission (apps can't do that for the user), it just stops this
+/// profile from being a valid target for a future server-side push send.
+Future<void> clearPushToken() async {
+  final userId = supabase.auth.currentUser?.id;
+  if (userId == null) return;
+  await supabase.from(AppConstants.profilesTable).update({'fcm_token': null}).eq('id', userId);
+}
