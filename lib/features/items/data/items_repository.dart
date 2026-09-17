@@ -72,6 +72,20 @@ class ItemsRepository {
     return ItemModel.fromMap(row);
   }
 
+  /// Every item the signed-in user has ever posted, any status — used by
+  /// "My reported items" in ProfileScreen. Unlike [fetchOpenItems], this
+  /// deliberately isn't filtered to status = 'open', since someone should
+  /// be able to see their own resolved/claimed items too.
+  Future<List<ItemModel>> fetchMyItems() async {
+    final userId = supabase.auth.currentUser!.id;
+    final rows = await supabase
+        .from(AppConstants.itemsTable)
+        .select('*, categories(name), item_images(image_url)')
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+    return rows.map(ItemModel.fromMap).toList();
+  }
+
   Future<void> fileReport({required String itemId, required String reason}) async {
     await supabase.from(AppConstants.reportsTable).insert({
       'item_id': itemId,

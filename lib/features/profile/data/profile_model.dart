@@ -10,12 +10,16 @@ class ProfileModel {
     this.username,
     this.fullName,
     this.avatarUrl,
+    this.phone,
+    this.fcmToken,
   });
 
   final String id;
   final String? username;
   final String? fullName;
   final String? avatarUrl;
+  final String? phone;
+  final String? fcmToken;
   final double rating;
   final int ratingCount;
   final bool isAdmin;
@@ -26,6 +30,8 @@ class ProfileModel {
       username: map['username'] as String?,
       fullName: map['full_name'] as String?,
       avatarUrl: map['avatar_url'] as String?,
+      phone: map['phone'] as String?,
+      fcmToken: map['fcm_token'] as String?,
       rating: (map['rating'] as num).toDouble(),
       ratingCount: (map['rating_count'] as num).toInt(),
       isAdmin: map['is_admin'] as bool? ?? false,
