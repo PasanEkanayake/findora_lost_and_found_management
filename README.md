@@ -496,21 +496,71 @@ you're ready to extend the app. It assumes you've completed Part A.
 
 ## App icon and branding
 
-`assets/images/` has the full Findora mark: a white location pin with an
-amber "found" dot, in the brand teal (`#0F6E56`) and amber (`#E8A33D`)
-used throughout `AppColors`.
+`assets/images/` has the Findora logo — a blue magnifying glass with a
+cyan lens and an orange location pin, with circuit-style accents. This is
+a real PNG asset (not hand-drawn vector shapes), composited into launcher
+icons with Pillow.
 
-- `app_icon.svg` / `app_icon.png` — the full square mark (SVG source and
-  a ready-to-use 1024×1024 PNG).
-- `app_icon_foreground.png` — pin + dot only, transparent background,
-  sized with the extra padding Android's adaptive icon mask needs.
-- `logo_lockup.svg` — icon + wordmark, used on the login screen (light
-  background).
-- `pin_glyph_white.svg` — just the pin + dot, no square, used on the
-  splash screen (teal background, where the square would blend in).
-- `scripts/generate_icon_pngs.py` — regenerates both PNGs (redraws the
-  mark directly with Pillow rather than rasterizing the SVG) if you ever
-  tweak the design.
+- `logo.png` — the logo itself, transparent background, used directly via
+  `Image.asset()` on the splash screen and login screen.
+- `app_icon.png` — the logo composited onto a rounded light-blue square,
+  the flat launcher icon source for `flutter_launcher_icons`.
+- `app_icon_foreground.png` — the logo alone on transparent, padded for
+  Android's adaptive icon safe zone.
+
+The app's whole color theme (`core/theme/app_colors.dart`) sources its
+primary/secondary colors from this logo — vivid blue primary, cyan
+accent, orange secondary — via `ColorScheme.fromSeed`, so the brand color
+carries through every screen's buttons, chips, and selected states
+automatically rather than needing per-screen updates.
+
+To regenerate the launcher icons after changing the logo:
+
+```bash
+dart run flutter_launcher_icons
+```
+
+## Profile sub-screens
+
+Everything under Profile is wired to real functionality, not placeholder
+taps:
+
+- **Edit profile** (pencil icon next to the avatar) — updates
+  `full_name`/`phone` on the `profiles` row, and uploads a new avatar to
+  the `avatars` Storage bucket (already set up back in Phase 1).
+- **My reported items** — every item you've posted, any status, with a
+  status badge (open/matched/claimed/resolved) — unlike the main feed,
+  which only shows open items.
+- **Notification settings** — reads the actual OS-level permission via
+  `FirebaseMessaging.getNotificationSettings()`, and a toggle that
+  registers or clears this device's push token on your profile. Real
+  state, not a decorative switch.
+- **Privacy & safety** — meetup safety guidance and a plain explanation
+  of what's shared with other users vs. kept private.
+- **Help & support** — an FAQ plus a "Contact support" button that opens
+  a pre-filled `mailto:` email. This needed a new direct dependency
+  (`url_launcher`) and a manifest `<queries>` entry for the `mailto:`
+  scheme — Android 11+ hides apps from `canLaunchUrl`/`launchUrl` unless
+  you declare you're looking for them.
+
+## The "Report item" button (Home and Matches only)
+
+The floating "Report item" button used to show on all four tabs,
+center-docked. It now only appears on Browse and Matches
+(`MainShell._branchesWithReportFab`), and floats at the bottom-right
+(`FloatingActionButtonLocation.endFloat`) instead of center-docked —
+reporting an item isn't a relevant action while reading chats or looking
+at your own profile.
+
+## Splash screen
+
+Rebuilt to match a provided reference design: a soft white-to-light-blue
+gradient background, the logo at a larger size, "Findora" in bold blue
+alongside an "AI-Powered Lost & Found" tagline, and a custom animated
+loading ring (a rotating `CustomPainter`, not a stock
+`CircularProgressIndicator`) with "Initializing AI Engine..." beneath it.
+The actual session-check logic (redirecting to `/login` or `/feed`) is
+unchanged — only the visual presentation changed.
 
 ## Google sign-in setup (Phase 2)
 
