@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/supabase/supabase_client.dart';
@@ -153,11 +153,22 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SvgPicture.asset(
-                  'assets/images/logo_lockup.svg',
-                  height: 56,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Image.asset('assets/images/logo.png', height: 52, width: 52),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Findora',
+                      style: GoogleFonts.manrope(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF1565D8),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 28),
                 Text('Welcome back', style: theme.textTheme.headlineMedium),
                 const SizedBox(height: 4),
                 Text(

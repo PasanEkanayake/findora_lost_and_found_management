@@ -77,3 +77,7 @@ final nearbyItemsProvider =
 final itemDetailProvider = FutureProvider.autoDispose.family<ItemModel, String>((ref, id) {
   return ref.watch(itemsRepositoryProvider).fetchItemById(id);
 });
+
+final myItemsProvider = FutureProvider.autoDispose<List<ItemModel>>((ref) {
+  return ref.watch(itemsRepositoryProvider).fetchMyItems();
+});
