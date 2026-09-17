@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -31,10 +32,19 @@ class ProfileScreen extends ConsumerWidget {
                 CircleAvatar(
                   radius: 32,
                   backgroundColor: theme.colorScheme.primaryContainer,
-                  child: Icon(
-                    Icons.person_outline,
-                    size: 32,
-                    color: theme.colorScheme.onPrimaryContainer,
+                  backgroundImage: profileAsync.maybeWhen(
+                    data: (profile) => profile.avatarUrl != null
+                        ? CachedNetworkImageProvider(profile.avatarUrl!)
+                        : null,
+                    orElse: () => null,
+                  ),
+                  child: profileAsync.maybeWhen(
+                    data: (profile) => profile.avatarUrl == null
+                        ? Icon(Icons.person_outline,
+                            size: 32, color: theme.colorScheme.onPrimaryContainer)
+                        : null,
+                    orElse: () => Icon(Icons.person_outline,
+                        size: 32, color: theme.colorScheme.onPrimaryContainer),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -88,6 +98,11 @@ class ProfileScreen extends ConsumerWidget {
                     },
                   ),
                 ),
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined),
+                  tooltip: 'Edit profile',
+                  onPressed: () => context.push('/profile/edit'),
+                ),
               ],
             ),
           ),
@@ -96,25 +111,25 @@ class ProfileScreen extends ConsumerWidget {
             leading: const Icon(Icons.inventory_2_outlined),
             title: const Text('My reported items'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () {},
+            onTap: () => context.push('/profile/my-items'),
           ),
           ListTile(
             leading: const Icon(Icons.notifications_outlined),
             title: const Text('Notification settings'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () {},
+            onTap: () => context.push('/profile/notifications'),
           ),
           ListTile(
             leading: const Icon(Icons.shield_outlined),
             title: const Text('Privacy & safety'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () {},
+            onTap: () => context.push('/profile/privacy-safety'),
           ),
           ListTile(
             leading: const Icon(Icons.help_outline),
             title: const Text('Help & support'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () {},
+            onTap: () => context.push('/profile/help'),
           ),
           profileAsync.maybeWhen(
             data: (profile) => profile.isAdmin
