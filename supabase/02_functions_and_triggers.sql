@@ -240,7 +240,20 @@ as $$
 $$;
 
 -- ----------------------------------------------------------------------------
--- my_conversations — one row per *confirmed* match the caller is part of,
+-- get_item_coordinates — plain lat/lng for one item, used by the map
+-- preview on ItemDetailScreen. Same st_y/st_x extraction pattern as
+-- nearby_items(), kept as its own tiny function rather than folded into
+-- the main item queries so the (one-to-many) photos join stays simple.
+-- ----------------------------------------------------------------------------
+create or replace function public.get_item_coordinates(p_item_id uuid)
+returns table (latitude double precision, longitude double precision)
+language sql
+stable
+as $$
+  select st_y(location::geometry), st_x(location::geometry)
+  from public.items
+  where id = p_item_id and location is not null;
+$$;
 -- with the other side's item, the most recent message (if any), and an
 -- unread count. Chat is deliberately gated behind a confirmed match, not
 -- available the moment a candidate match appears — see Phase 5's notes on
