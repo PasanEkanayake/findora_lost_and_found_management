@@ -578,6 +578,67 @@ redirect back into the app needs setup outside of Dart code:
 Skip this and the email/password flow still works fine — the Google
 button will just fail gracefully with an error message.
 
+## Item detail screen: carousel, map preview, smart contact
+
+- The photo `PageView` now has animated dot indicators instead of no way
+  to tell there's more than one photo.
+- A small non-interactive map preview (`google_maps_flutter` in
+  `liteModeEnabled`) shows under the description when the item has a
+  location — backed by a new `get_item_coordinates()` RPC, since a raw
+  PostGIS geography value doesn't serialize predictably over PostgREST
+  (same reasoning as `nearby_items()` back in Phase 6).
+- The sticky bottom bar deliberately does **not** offer a generic
+  "message the poster" shortcut. Chat is gated behind a confirmed AI
+  match on purpose (Phase 5/7) — that gate exists specifically so contact
+  info isn't shared before ownership is reasonably verified, and a
+  message button here would quietly undermine it. Instead, the bar checks
+  whether a *real* confirmed match already connects one of your own items
+  to this one; if so, it opens that chat, and if not, it points you at
+  reporting your own matching item instead of a dead end.
+
+## Loading skeletons
+
+`core/widgets/shimmer_list.dart` has two reusable shimmer placeholders —
+`ShimmerCardList` (matches the image+title+subtitle card shape used by
+the feed, matches, and my-items lists) and `ShimmerTileList` (matches the
+chat list's avatar rows) — now shown during loading instead of a bare
+`CircularProgressIndicator` that gives no sense of what's about to
+appear. The `shimmer` package was already in `pubspec.yaml` from Phase 1
+but had never actually been used until now.
+
+## Onboarding
+
+A 3-page carousel (`features/onboarding/onboarding_screen.dart`) explains
+reporting an item, AI matching, and the verify-then-reunite flow before
+first login. It's shown once per *device*, not per account — persisted
+via `shared_preferences` (`core/onboarding/onboarding_prefs.dart`), added
+as a direct dependency since it was previously only present transitively
+through `supabase_flutter`. The splash screen's redirect logic now checks
+this flag: signed out + onboarding not seen → `/onboarding`; signed out +
+already seen → `/login`. `/onboarding` also had to be added to the
+router's `isAuthRoute` set, or the redirect logic built in Phase 2 would
+immediately bounce a signed-out user away from it back to `/login`.
+
+## Accessibility pass
+
+- Every icon-only button now has a `tooltip` (which also sets its
+  screen-reader label in Flutter) — the password visibility toggle, send
+  button, star-rating buttons, and the post-item form's close button were
+  missing one.
+- Two small overlay buttons (remove-photo on a thumbnail, change-avatar
+  badge) had tap targets as small as 24dp — well under the 48dp minimum.
+  Both are now wrapped with `Semantics` labels and padded hit areas; the
+  photo-remove button only reaches ~40dp rather than the full 48dp, since
+  the thumbnails sit only 12px apart and a full-size target would overlap
+  the next photo.
+- Replaced a hardcoded brand-blue hex color on the login screen with
+  `theme.colorScheme.primary`. Material 3's `ColorScheme.fromSeed`
+  generates a lighter, higher-contrast tone of the brand color
+  specifically for dark mode — a fixed hex value skips that and could end
+  up low-contrast against a dark background. (The splash screen's fixed
+  light design is left as-is; splash screens commonly show a constant
+  brand look regardless of system theme.)
+
 ## Auth state and routing (Phase 2)
 
 **Profile data fix**: the signup form's "Full name" field used to be sent
