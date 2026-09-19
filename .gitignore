@@ -11,8 +11,6 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
-.env
-.env.example
 
 # IntelliJ related
 *.iml
@@ -48,3 +46,8 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+.env
+.env.example
+
+/ai_service/.venv
