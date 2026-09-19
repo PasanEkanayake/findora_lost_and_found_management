@@ -145,22 +145,30 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                       Positioned(
                         right: 0,
                         bottom: 0,
-                        child: GestureDetector(
-                          onTap: _isUploadingAvatar ? null : _pickAvatar,
-                          child: CircleAvatar(
-                            radius: 18,
-                            backgroundColor: theme.colorScheme.primary,
-                            child: _isUploadingAvatar
-                                ? SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: theme.colorScheme.onPrimary,
-                                    ),
-                                  )
-                                : Icon(Icons.camera_alt_outlined,
-                                    size: 18, color: theme.colorScheme.onPrimary),
+                        child: Semantics(
+                          label: 'Change profile photo',
+                          button: true,
+                          child: GestureDetector(
+                            onTap: _isUploadingAvatar ? null : _pickAvatar,
+                            behavior: HitTestBehavior.opaque,
+                            child: Padding(
+                              padding: const EdgeInsets.all(6),
+                              child: CircleAvatar(
+                                radius: 18,
+                                backgroundColor: theme.colorScheme.primary,
+                                child: _isUploadingAvatar
+                                    ? SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: theme.colorScheme.onPrimary,
+                                        ),
+                                      )
+                                    : Icon(Icons.camera_alt_outlined,
+                                        size: 18, color: theme.colorScheme.onPrimary),
+                              ),
+                            ),
                           ),
                         ),
                       ),
