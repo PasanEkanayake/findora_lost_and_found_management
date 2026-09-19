@@ -1,0 +1,25 @@
+# Optional. Only needed for the /embed/image endpoint (server-side image
+# embedding via TensorFlow/Keras MobileNetV2 + OpenCV — see
+# image_pipeline.py's doc for why that endpoint exists and why nothing in
+# the app calls it yet). Install AFTER requirements.txt, only if you
+# actually want that endpoint working:
+#
+#   pip install -r requirements.txt
+#   pip install -r requirements-image.txt
+#
+# tensorflow-cpu's wheel is ~390MB — on a slow or throttled connection,
+# pip's default read timeout (a per-chunk-stall timeout, not a total-time
+# one — it resets on every byte received, so this isn't "give up after 15s
+# total") can still trip on a connection slow enough that individual reads
+# stall past it. If `pip install -r requirements-image.txt` times out
+# partway through the download, raise the timeout and retry — pip resumes
+# using what it already cached rather than starting over:
+#
+#   pip install --default-timeout=1000 -r requirements-image.txt
+#
+# Still timing out? A flaky/very slow connection to PyPI's CDN
+# (files.pythonhosted.org) is the usual cause, not this repo — see this
+# folder's README ("Two install tiers") for more options.
+tensorflow-cpu==2.18.0
+opencv-python-headless==4.10.0.84
+numpy==1.26.4

@@ -1,0 +1,15 @@
+# Core service — everything the app actually calls today (/embed/text via
+# TextEmbeddingService). No TensorFlow/OpenCV here on purpose: the whole
+# point of splitting this out is that a from-scratch `pip install` of this
+# file alone downloads tens of MB, not TensorFlow's ~390MB wheel, which is
+# the thing that tends to time out on a slow/throttled connection. See
+# requirements-image.txt and this folder's README ("Two install tiers")
+# for the optional /embed/image endpoint's extra dependencies.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+python-multipart==0.0.20
+
+# Text pipeline (NLP matching signal)
+sentence-transformers==3.3.1
+nltk==3.9.1

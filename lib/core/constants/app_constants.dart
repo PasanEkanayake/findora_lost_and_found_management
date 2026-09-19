@@ -11,6 +11,7 @@ class AppConstants {
   static const String itemImagesTable = 'item_images';
   static const String matchesTable = 'matches';
   static const String messagesTable = 'messages';
+  static const String contactMessagesTable = 'contact_messages';
   static const String claimsTable = 'claims';
   static const String reportsTable = 'reports';
   static const String ratingsTable = 'ratings';

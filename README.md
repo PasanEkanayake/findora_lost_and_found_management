@@ -15,6 +15,38 @@ jump straight to **"Troubleshooting Gradle errors"** in Part A.
 
 ---
 
+## What's new since the original build
+
+A later upgrade pass added the following. Everything below degrades
+gracefully if you skip its setup step — the app still runs — but you'll
+miss the feature until you do:
+
+| Feature | What changed | Setup needed? |
+|---|---|---|
+| Delete your own posts | Owner-only "Delete post" (item detail's menu, swipe-to-delete in My Items) — now a **soft delete**, see below | Run `supabase/08_soft_delete.sql` |
+| Home screen header | Gradient greeting header with a live lost/found count, replacing the old blank title bar | None |
+| CNN photo auto-fill | Now also suggests a **title**, not just category | None |
+| Lost/found time | Optional date+time picker when posting | Run `supabase/05_multimodal_matching.sql` |
+| Contact any poster | New "Contact poster" direct-message thread, separate from the confirmed-match chat (Chats tab now has two tabs) | Run `supabase/06_contact_messaging.sql` |
+| Multimodal matching | Match score now blends image (CNN), text (NLP), and GPS proximity, not just image | Run `supabase/05_multimodal_matching.sql`; optionally deploy `ai_service/` for the text signal |
+| App icon | Same logo, white background instead of light blue | None — already regenerated. Re-run `python3 scripts/generate_icon_pngs.py` only if you change the logo |
+| Email confirmation UX | Branded confirm email, opens the app on mobile / closes the tab on desktop, plus a second "you're verified" email | See "Email confirmation flow" below — several manual steps |
+| Password strength | Live checklist + 5 rules enforced on signup | None |
+| Manual location pin | "Adjust pin on map" alongside GPS auto-detect when posting | None |
+| Exit confirmation | Back button on the Browse tab's root now asks before closing the app | None |
+| Light/dark theme toggle | Profile → Appearance — Light/Dark/System, persisted | None |
+| Soft delete | Deleting a post (by its owner or an admin) now hides it instead of removing the row — see "Soft delete: items are hidden, never erased" below | Run `supabase/08_soft_delete.sql` |
+| "NEW" badge | Items posted within the last 3 days show a NEW pill on their card and detail page | None |
+| Browse tab always goes home | Tapping "Browse" in the bottom nav now always shows the list, even if the map view was left open | None |
+
+New/changed SQL files, run in order after `04_storage_setup.sql`:
+`05_multimodal_matching.sql`, `06_contact_messaging.sql`,
+`07_email_confirmation.sql` (the last one has manual placeholders to fill
+in — see its header comment and "Email confirmation flow" below),
+`08_soft_delete.sql`.
+
+---
+
 # Part A — Setup, step by step
 
 ## A1. Install the prerequisites (once per machine)
@@ -150,6 +182,15 @@ warnings about Chrome or Xcode if you don't plan to build for web/iOS.
 7. Repeat step 4 for `04_storage_setup.sql`.
    ⚠️ **Run these four in this exact order** — each one depends on
    tables/functions the previous one created.
+7b. Same again for `05_multimodal_matching.sql`, then
+   `06_contact_messaging.sql`, then `07_email_confirmation.sql` (also in
+   order) — these add event time, multimodal (image+text+GPS) matching,
+   direct contact messaging, and the welcome-email trigger. The app runs
+   without them too (older columns/functions these `create or replace`
+   just won't exist yet), but My Items' delete, Contact poster, and the
+   richer match scoring all depend on them. `07_email_confirmation.sql`
+   specifically has two placeholders to edit before running it — see
+   "Email confirmation flow" further down.
 8. In the left sidebar, click the gear icon (**Project Settings**) →
    **API Keys**. Copy two values, you'll need them in the next step:
    - **Project URL** (looks like `https://xxxxx.supabase.co`)
@@ -172,6 +213,10 @@ warnings about Chrome or Xcode if you don't plan to build for web/iOS.
    SUPABASE_URL=https://your-actual-project-ref.supabase.co
    SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_actual_key
    ```
+   Two more keys exist below those and can stay blank for now —
+   `AUTH_CALLBACK_URL` (see "Email confirmation flow") and
+   `AI_SERVICE_URL` (see `ai_service/README.md`) — both are optional and
+   the app degrades gracefully without them.
 4. Save the file. `.env` is already listed under `assets` in
    `pubspec.yaml`, so Flutter bundles it automatically — you don't need
    to do anything else for it to be picked up. It's also already excluded
@@ -215,13 +260,22 @@ the rest of the app work without them.
 
 ### A5.3 Regenerate the app icon (only if you change the design)
 
-The launcher icon PNGs are already generated and referenced from
-`pubspec.yaml`. If you ever redesign `assets/images/app_icon.svg` and
-want to regenerate the launcher icons from a fresh PNG, run:
+The launcher icon PNGs are already generated (white background, logo from
+`assets/images/logo.png`) and referenced from `pubspec.yaml`. If you ever
+redesign `assets/images/logo.png` and want to regenerate every launcher
+icon (Android, adaptive icon foreground, web/PWA, favicon) from it:
+
+```bash
+python3 scripts/generate_icon_pngs.py
+```
+
+or, equivalently for just the Android files, the standard Flutter tool:
 
 ```bash
 dart run flutter_launcher_icons
 ```
+
+See `assets/images/README.md` for what each generated file is for.
 
 ## A6. Connect your physical Android device
 
@@ -503,10 +557,14 @@ icons with Pillow.
 
 - `logo.png` — the logo itself, transparent background, used directly via
   `Image.asset()` on the splash screen and login screen.
-- `app_icon.png` — the logo composited onto a rounded light-blue square,
-  the flat launcher icon source for `flutter_launcher_icons`.
+- `app_icon.png` — the logo composited onto a rounded **white** square
+  (changed from the original light-blue background), the flat launcher
+  icon source for `flutter_launcher_icons`.
 - `app_icon_foreground.png` — the logo alone on transparent, padded for
-  Android's adaptive icon safe zone.
+  Android's adaptive icon safe zone. Its background color is set
+  separately to white in `android/app/src/main/res/values/colors.xml`
+  (`ic_launcher_background`) and `pubspec.yaml`
+  (`flutter_launcher_icons.adaptive_icon_background`).
 
 The app's whole color theme (`core/theme/app_colors.dart`) sources its
 primary/secondary colors from this logo — vivid blue primary, cyan
@@ -514,11 +572,15 @@ accent, orange secondary — via `ColorScheme.fromSeed`, so the brand color
 carries through every screen's buttons, chips, and selected states
 automatically rather than needing per-screen updates.
 
-To regenerate the launcher icons after changing the logo:
+To regenerate every launcher/PWA icon after changing the logo:
 
 ```bash
-dart run flutter_launcher_icons
+python3 scripts/generate_icon_pngs.py
 ```
+
+See `assets/images/README.md` for details on what each output is used
+for, and the equivalent `flutter_launcher_icons` command for just the
+Android files.
 
 ## Profile sub-screens
 
@@ -530,7 +592,13 @@ taps:
   the `avatars` Storage bucket (already set up back in Phase 1).
 - **My reported items** — every item you've posted, any status, with a
   status badge (open/matched/claimed/resolved) — unlike the main feed,
-  which only shows open items.
+  which only shows open items. Swipe a card left, or tap its trailing
+  delete icon, to remove a post from the app (`ItemsRepository.deleteItem`
+  — a soft delete, see "Soft delete: items are hidden, never erased"
+  below for what that actually does).
+- **Appearance** — Light/Dark/System, persisted via `shared_preferences`
+  (`core/theme/theme_mode_controller.dart`). Overrides the OS setting
+  until switched back to "System default".
 - **Notification settings** — reads the actual OS-level permission via
   `FirebaseMessaging.getNotificationSettings()`, and a toggle that
   registers or clears this device's push token on your profile. Real
@@ -578,23 +646,54 @@ redirect back into the app needs setup outside of Dart code:
 Skip this and the email/password flow still works fine — the Google
 button will just fail gracefully with an error message.
 
-## Item detail screen: carousel, map preview, smart contact
+## Item detail screen: carousel, map preview, delete, and contact
 
 - The photo `PageView` now has animated dot indicators instead of no way
-  to tell there's more than one photo.
+  to tell there's more than one photo, plus a rounded "sheet" content
+  layout that overlaps the carousel slightly (`_ItemDetailBody`).
 - A small non-interactive map preview (`google_maps_flutter` in
   `liteModeEnabled`) shows under the description when the item has a
   location — backed by a new `get_item_coordinates()` RPC, since a raw
   PostGIS geography value doesn't serialize predictably over PostgREST
   (same reasoning as `nearby_items()` back in Phase 6).
-- The sticky bottom bar deliberately does **not** offer a generic
-  "message the poster" shortcut. Chat is gated behind a confirmed AI
-  match on purpose (Phase 5/7) — that gate exists specifically so contact
-  info isn't shared before ownership is reasonably verified, and a
-  message button here would quietly undermine it. Instead, the bar checks
-  whether a *real* confirmed match already connects one of your own items
-  to this one; if so, it opens that chat, and if not, it points you at
-  reporting your own matching item instead of a dead end.
+- **Owner**: an overflow menu (`_OwnerMenu`) with "Delete post" — a soft
+  delete (see "Soft delete: items are hidden, never erased" below), not a
+  real `delete`; RLS no longer permits the latter at all.
+- **Everyone else**: two separate paths, kept deliberately apart rather
+  than merged into one generic "message" button:
+  - A confirmed AI match connecting one of *your* items to this one
+    opens the verified claim/chat flow (`ChatScreen`) — still gated
+    behind a confirmed match on purpose (Phase 5/7), so contact info
+    isn't shared before ownership looks plausible.
+  - Otherwise, a **"Contact poster"** button opens a lighter, separate
+    direct-message thread (`contact_threads`/`contact_messages` — see
+    `supabase/06_contact_messaging.sql` and the "Direct contact
+    messaging" section below) — for a quick question before you're sure
+    it's a match, without needing an AI match to exist first. The old
+    "report your own matching item" shortcut is still there underneath
+    it.
+
+## Direct contact messaging
+
+A second, parallel messaging system alongside the confirmed-match chat
+from Phase 7 — added because item detail's old "no generic contact
+button, on purpose" design (see above) was too strict for "quick
+question before I'm sure it's mine" cases. Deliberately kept as a
+*separate* table/flow rather than folding into `matches`/`messages`, so
+the claim-verification lifecycle (`claims`, ratings, "mark returned")
+stays exclusively reachable through a real AI match — direct contact is
+just messaging, nothing more.
+
+- `contact_threads` — one row per (item, person who reached out);
+  `start_contact_thread()` is idempotent, so tapping "Contact poster"
+  again just reopens the same thread.
+- `contact_messages` — the messages themselves, RLS-restricted to the
+  thread's two participants.
+- `lib/features/contact/` — `ContactRepository`, `ContactChatScreen`
+  (a deliberately plain bubble UI, no claim-lifecycle banner).
+- `ChatListScreen` now has two tabs: **Matches** (unchanged) and
+  **Direct messages** (new), so both conversation types stay visible
+  from one place.
 
 ## Loading skeletons
 
@@ -710,6 +809,11 @@ pip install -r requirements.txt
 python export_tflite_model.py
 ```
 
+`tensorflow`'s wheel is large (~350–400MB) — on a slow or throttled
+connection, pip's install can time out partway through. If it does,
+retry with a longer timeout (pip resumes from its cache rather than
+re-downloading from scratch): `pip install --default-timeout=1000 -r requirements.txt`.
+
 This downloads pretrained MobileNetV2 (ImageNet) weights, wraps them so a
 single forward pass returns both a 1280-d embedding and a 1000-way
 classification, converts to TFLite with dynamic-range quantization, and
@@ -728,32 +832,65 @@ than crashing.
 ## How the AI matching actually works
 
 1. On-device: the exported MobileNetV2 model runs on each photo,
-   producing a predicted ImageNet label and a 1280-d embedding vector.
+   producing a predicted ImageNet label and a 1280-d embedding vector —
+   this is the CNN half of matching.
 2. A heuristic in `core/ml/category_mapper.dart` maps that fine-grained
    label (e.g. "Labrador_retriever") onto one of Findora's categories
-   (e.g. "Pets") to pre-fill the post form.
+   (e.g. "Pets") to pre-fill the post form. The label also pre-fills the
+   **title** field (title-cased — `PostItemScreen._titleCaseFromLabel`),
+   as long as the person hasn't already typed one themselves.
 3. Only the embedding, label, and photo get uploaded — matching needs
    everyone else's items too, so it can't happen purely on-device.
-4. A trigger (`record_matches_for_image`) fires the moment a photo with
+4. Separately, if `AI_SERVICE_URL` is configured (see `ai_service/`),
+   the title + description are sent there for a **text/NLP** embedding
+   (Sentence-Transformers, with NLTK doing tokenization/stopword/
+   lemmatization cleanup first — the "N" and "S" of the documented
+   TensorFlow/OpenCV/Sentence-Transformers/NLTK stack) — best-effort,
+   skipped entirely if unset, slow, or unreachable.
+5. A trigger (`record_matches_for_image`) fires the moment a photo with
    an embedding is inserted, comparing it against all opposite-type,
    open, same-category items via pgvector's cosine distance operator
-   (`<=>`), writing candidates above the similarity threshold into
-   `matches`.
-5. `MatchesScreen` reads those via `my_matches()`, which resolves each
+   (`<=>`) to get an image-similarity candidate list, then — for each
+   candidate — blends in text similarity (if both sides have a text
+   embedding) and GPS proximity (if both sides have a location) into one
+   **combined score**, written to `matches` (see
+   `supabase/05_multimodal_matching.sql`'s `combined_match_score()`).
+6. `MatchesScreen` reads those via `my_matches()`, which resolves each
    row into "my item" vs "the matched item" from the caller's
-   perspective — either owner can confirm or dismiss it.
+   perspective — either owner can confirm or dismiss it, and now also
+   sees the score breakdown ("📷 92% · 📝 78% · 📍 1.2 km").
 
-## The matching engine, end to end (Phase 5)
+## The matching engine, end to end (Phase 5, extended)
 
 - **`record_matches_for_image`**: an `after insert` trigger on
   `item_images` for rows with a non-null `embedding`. Runs
-  `match_items()` and inserts results into `matches`,
-  `on conflict do nothing` so re-processing never duplicates. Runs inside
-  the same transaction as the photo insert.
+  `match_items()` for the image-similarity **candidate list** (this is
+  the fast ANN "recall" step — see the multimodal note below), computes
+  text similarity + GPS proximity for each candidate, and inserts the
+  blended result into `matches`, `on conflict do nothing` so
+  re-processing never duplicates. Runs inside the same transaction as
+  the photo insert.
 - **`match_items()` excludes same-user matches** — posting both a "lost"
   and "found" report yourself won't match against yourself.
+- **Multimodal scoring** (`supabase/05_multimodal_matching.sql`):
+  `match_items()` stays a pure image-similarity ANN search on purpose —
+  it's the one step that can actually use `item_images.embedding`'s
+  HNSW index, so it's what keeps matching fast as the table grows.
+  Everything past that (text similarity via `items.text_embedding`, GPS
+  proximity via `gps_proximity_score()`) only ever runs over the
+  already-small candidate list `match_items()` returns, then
+  `combined_match_score()` blends the three with weights 0.5 image / 0.3
+  text / 0.2 GPS, re-normalized over whichever signals are actually
+  present for that pair (not every item has a location or a text
+  embedding). `rescore_matches_for_item()` exists because the text
+  embedding often arrives *after* the item row is first inserted (an
+  async HTTP call to `ai_service/`, not guaranteed to finish before the
+  first photo upload) — call it once that embedding lands to backfill
+  `text_similarity`/`similarity_score` on that item's existing matches.
 - **`my_matches()`**: resolves `item_a_id`/`item_b_id` into "my item" vs
-  "the matched item" from `auth.uid()`'s perspective in one query.
+  "the matched item" from `auth.uid()`'s perspective in one query, now
+  including the `image_similarity`/`text_similarity`/`distance_meters`
+  breakdown alongside the blended `similarity_score`.
 - Item owners can `update` their own matches (confirm/dismiss), not just
   read them.
 
@@ -862,6 +999,131 @@ editor for your first moderator:
 update public.profiles set is_admin = true where id = '<user-uuid>';
 ```
 
+## Event time and manual location adjustment (posting an item)
+
+Two additions to `PostItemScreen`, both optional:
+
+- **When it was lost/found** — a date+time picker (`_pickEventTime`),
+  stored in `items.event_time`, separate from `created_at` (when the
+  *report* was posted). Shown on the item detail screen alongside
+  "Reported [date]" when set.
+- **Adjust pin on map** — `LocationPickerScreen`
+  (`core/location/location_picker_screen.dart`) fine-tunes whatever
+  "Add current location" auto-detected, using a fixed center pin over a
+  draggable map (not a draggable `Marker` — see that file's doc for why)
+  plus a reverse-geocoded label on confirm.
+
+## Password strength (signup)
+
+`core/widgets/password_strength.dart` defines five rules (8+ characters,
+upper/lowercase, a number, a special character) as data
+(`List<PasswordRule>`) rather than inlined validator logic, so the same
+rules back both the `TextFormField` validator and a live
+`PasswordStrengthIndicator` (a progress bar + a checklist that lights up
+each rule as it's satisfied) shown under the field as the person types.
+
+## Exit confirmation (Browse tab)
+
+`MainShell` wraps its `Scaffold` in a `PopScope` with
+`canPop: !isOnHomeTab` — every tab except Browse keeps Android's normal
+back behavior (go_router/Navigator resolve it), but a back press with
+Browse's own stack already at its root has nowhere else in-app to go, so
+that specific case is intercepted and shows a confirm dialog
+(`showConfirmDialog`) before actually calling `SystemNavigator.pop()`.
+
+Also in `MainShell`: the bottom nav's `onDestinationSelected` resets
+`feedShowsMapProvider` to `false` whenever Browse (index 0) is selected —
+so tapping Browse always lands you on the list, even if you'd left the
+map view open. This has to happen from `MainShell` rather than from
+`ItemFeedScreen` resetting its own state, because go_router's
+`StatefulShellRoute` keeps `ItemFeedScreen` mounted (just offscreen, in an
+`IndexedStack`) while another tab is showing — nothing re-initializes it
+on a tab switch, so its map/list choice had to move out of local `State`
+and into that provider before anything outside the screen could reach it.
+
+## Soft delete: items are hidden, never erased
+
+Deleting a post — by its own owner (item detail's menu, My Items) or by
+an admin removing a flagged item (Flagged reports) — no longer runs an
+actual `delete` against the database. `08_soft_delete.sql` adds
+`items.deleted_at` (nullable; null means active) and both delete paths
+now just set it:
+
+```dart
+await supabase.from('items').update({'deleted_at': DateTime.now().toIso8601String()}).eq('id', itemId);
+```
+
+That same migration also **drops** the `items` table's `delete` RLS
+policies entirely (both the owner one and the admin one) — so this isn't
+just an app-code convention; a real `delete` against `items` fails at the
+database level even for someone calling the Supabase client directly with
+a valid session, bypassing the app. Every read this repository does
+(`fetchOpenItems`, `fetchMyItems`, `fetchItemById`) filters
+`deleted_at is null`, so a soft-deleted item disappears from the app
+exactly as if it had been hard-deleted — the difference only shows up if
+you go looking for it directly in the database (which is the point: an
+accidental delete, or a moderation call worth revisiting, is one
+`update ... set deleted_at = null` away from being undone).
+
+Matching follows the same idea but with one deliberate exception:
+`match_items()` and `my_matches()` (Phase 5) both exclude deleted items,
+so a removed item stops being surfaced as a *candidate* match going
+forward and any still-*pending* match against it disappears — but
+`my_conversations()` (Phase 7, confirmed-match chat) is left unfiltered
+on purpose, so an existing conversation about an item stays reachable
+even after that item is later deleted. Chat history is worth keeping;
+dangling "confirm or dismiss?" prompts about a removed item aren't.
+
+Admin's `removeItem()` also updates any other still-open reports against
+that item to `dismissed` — with a real delete, `reports.item_id`'s
+cascade used to make them disappear from the moderation queue for free;
+a soft delete leaves `reports` rows untouched unless this does it
+explicitly, so without it they'd sit in the open queue forever pointing
+at an item that's already been taken down.
+
+## "NEW" badge
+
+`core/widgets/new_badge.dart` defines `isRecentlyPosted(DateTime)` (true
+for `newPostWindow`, currently 3 days, after `created_at`) and a small
+`NewBadge` pill widget, shown on feed cards and the item detail screen's
+badge row whenever that check passes. There's no timer or scheduled job
+behind this — every build just re-checks the item's age against
+`newPostWindow`, so the badge stops appearing on its own the next time
+that part of the UI happens to rebuild (pull-to-refresh, reopening the
+item, reopening the app) after the window has elapsed. Change how long
+"new" lasts by editing `newPostWindow` in that one file.
+
+## Email confirmation flow
+
+Three pieces, all independently optional (skip any of them and Supabase's
+own default confirmation email/redirect still works, just without this
+project's mobile-handoff/auto-close/welcome-email additions):
+
+1. **Branded confirmation email** — paste
+   `supabase/email_templates/confirm_signup.html` into Supabase Dashboard
+   → Authentication → Email Templates → "Confirm signup" (Message body),
+   and set its Subject to `Confirm your email for Findora`.
+2. **`web/auth-callback.html`** — a self-contained static page (no
+   Flutter build needed) that `{{ .ConfirmationURL }}` redirects the
+   browser to after confirming. On mobile it hands off into the app via
+   the same `io.supabase.findora://` custom scheme already used for
+   Google sign-in (supabase_flutter's built-in deep-link handling picks
+   up the auth data automatically — no extra Dart code needed); on
+   desktop it shows success and closes the tab (best-effort — see the
+   file's comment on why `window.close()` can't be guaranteed). Host it
+   by running `supabase/07_email_confirmation.sql` (creates a public
+   `site` Storage bucket) and uploading this one file to that bucket, or
+   on any other static host — then set both its public URL and
+   `AUTH_CALLBACK_URL` in `.env` to that same URL, and add it under
+   Authentication → URL Configuration → Redirect URLs.
+3. **Follow-up "you're confirmed!" email** — `07_email_confirmation.sql`
+   adds a trigger that fires the moment `auth.users.email_confirmed_at`
+   is first set, calling the `send-welcome-email` Edge Function (Resend
+   API) — see `supabase/functions/send-welcome-email/README.md` for
+   deployment. That SQL file has two placeholders
+   (`YOUR_PROJECT_REF`, `YOUR_SERVICE_ROLE_KEY`) to fill in before
+   running it.
+
 ## A few things to double-check before shipping
 
 - **pgvector inserts**: `ItemsRepository.createItem()` inserts a Dart
@@ -880,45 +1142,66 @@ update public.profiles set is_admin = true where id = '<user-uuid>';
 ```
 lib/
   core/
-    theme/         AppColors + AppTheme (Material 3, light & dark)
+    theme/         AppColors + AppTheme (Material 3, light & dark),
+                    ThemeModeController (persisted light/dark/system)
     router/         go_router config with a StatefulShellRoute bottom nav
     constants/      table names, bucket names, RPC function names
     providers/      currentUserProvider, authStateChangesProvider
     supabase/       shared Supabase client accessor
-    ml/             TfliteClassifier, its provider, category_mapper
-    location/       shared getCurrentPositionOrNull() helper
+    ml/             TfliteClassifier, its provider, category_mapper,
+                    TextEmbeddingService (optional ai_service/ client)
+    location/       getCurrentPositionOrNull(), LocationPickerScreen
     notifications/  FCM setup + push token registration
-    widgets/        MainShell (bottom nav + FAB)
+    widgets/        MainShell (bottom nav + FAB + exit confirmation),
+                    showConfirmDialog, PasswordStrengthIndicator
   features/
     splash/         shows the pin glyph on brand teal
-    auth/           login, signup, forgot-password — wired to Supabase Auth
-    home/           browse tab: real search/filters, plus items_map_view.dart
+    auth/           login, signup (+ password strength), forgot-password
+    home/           browse tab: hero header, search/filters, items_map_view.dart
     items/
       data/          CategoryModel, ItemModel, NearbyItemModel, ClaimModel,
                       ItemsRepository, ClaimsRepository, providers
-      post_item_screen.dart   photo picking, location, AI tagging, upload
-      item_detail_screen.dart  full detail, photo gallery, report action
+      post_item_screen.dart   photo picking, location (+ manual adjust),
+                               event time, AI tagging, upload
+      item_detail_screen.dart  full detail, delete (owner), contact (others)
     matches/
       data/          MatchModel, MatchesRepository, providers
-      matches_screen.dart   real matches, confirm/dismiss, message action
+      matches_screen.dart   real matches, confirm/dismiss, score breakdown
     chat/
       data/          ConversationModel, MessageModel, MessagesRepository
-      chat_list_screen.dart   real conversations, unread badges
+      chat_list_screen.dart   tabbed: confirmed matches + direct messages
       chat_screen.dart        live messages + claim/return/rate lifecycle
+    contact/
+      data/          ContactThreadModel, ContactMessageModel, ContactRepository
+      contact_chat_screen.dart  plain messaging, no claim lifecycle
     profile/
       data/          ProfileModel, AdminRepository, ReportModel, providers
-      profile_screen.dart      real rating, conditional admin entry
+      profile_screen.dart      real rating, appearance picker, admin entry
+      my_items_screen.dart     swipe/tap to delete
       admin_reports_screen.dart  moderation: dismiss / remove item
 supabase/
   01_extensions_and_tables.sql
   02_functions_and_triggers.sql
   03_rls_policies.sql
   04_storage_setup.sql
+  05_multimodal_matching.sql   event_time, text embeddings, image+text+GPS scoring
+  06_contact_messaging.sql     direct "Contact poster" threads
+  07_email_confirmation.sql    welcome-email trigger + public site bucket
+  email_templates/             confirm_signup.html, welcome_email.html
+  functions/send-welcome-email/  Deno Edge Function (Resend API)
+ai_service/            optional FastAPI microservice — see its README.md
+  requirements.txt            core: text embeddings (Sentence-Transformers + NLTK)
+  requirements-image.txt      optional: image embeddings (TensorFlow/Keras + OpenCV)
+  Dockerfile                  full build (both tiers)
+  Dockerfile.text-only        smaller build, text tier only
 scripts/
   export_tflite_model.py   generates the on-device model + labels
-  generate_icon_pngs.py    regenerates the launcher icon PNGs
+  generate_icon_pngs.py    regenerates every launcher/PWA icon PNG
   requirements.txt
 assets/
   models/           drop the exported .tflite + labels file here
   images/           app_icon.svg/.png, logo_lockup.svg, pin_glyph_white.svg
+web/
+  auth-callback.html   email confirmation landing page (mobile handoff /
+                       desktop auto-close) — see "Email confirmation flow"
 ```

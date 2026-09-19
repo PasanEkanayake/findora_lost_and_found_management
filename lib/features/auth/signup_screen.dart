@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/supabase/supabase_client.dart';
+import '../../core/widgets/password_strength.dart';
 
 /// Account creation. `signUp()` passes `full_name` in `data`, which the
 /// `handle_new_user` trigger (see supabase/02_functions_and_triggers.sql)
@@ -21,9 +23,22 @@ class _SignupScreenState extends State<SignupScreen> {
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
   bool _isSubmitting = false;
+  bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // Repaints the strength meter/checklist on every keystroke — a plain
+    // ChangeNotifier-backed controller doesn't otherwise trigger a rebuild
+    // of anything reading its `.text` outside the field itself.
+    _passwordController.addListener(_onPasswordChanged);
+  }
+
+  void _onPasswordChanged() => setState(() {});
 
   @override
   void dispose() {
+    _passwordController.removeListener(_onPasswordChanged);
     _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
@@ -47,10 +62,16 @@ class _SignupScreenState extends State<SignupScreen> {
     setState(() => _isSubmitting = true);
 
     try {
+      // Only passed when configured (see .env.example's AUTH_CALLBACK_URL)
+      // — without it, Supabase falls back to its project-level Site URL,
+      // which still works, just without web/auth-callback.html's "open the
+      // app on mobile / auto-close the tab on desktop" behavior.
+      final callbackUrl = dotenv.env['AUTH_CALLBACK_URL'];
       final response = await supabase.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,
         data: {'full_name': _nameController.text.trim()},
+        emailRedirectTo: (callbackUrl != null && callbackUrl.isNotEmpty) ? callbackUrl : null,
       );
 
       if (!mounted) return;
@@ -123,15 +144,22 @@ class _SignupScreenState extends State<SignupScreen> {
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _passwordController,
-                  obscureText: true,
-                  decoration: const InputDecoration(
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
                     labelText: 'Password',
-                    prefixIcon: Icon(Icons.lock_outline),
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      icon: Icon(_obscurePassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined),
+                      tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    ),
                   ),
-                  validator: (value) => (value == null || value.length < 6)
-                      ? 'At least 6 characters'
-                      : null,
+                  validator: validateStrongPassword,
                 ),
+                const SizedBox(height: 12),
+                PasswordStrengthIndicator(password: _passwordController.text),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _confirmController,

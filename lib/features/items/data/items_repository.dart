@@ -28,7 +28,8 @@ class ItemsRepository {
     var query = supabase
         .from(AppConstants.itemsTable)
         .select('*, categories(name), item_images(image_url)')
-        .eq('status', 'open');
+        .eq('status', 'open')
+        .filter('deleted_at', 'is', null);
 
     if (categoryId != null) {
       query = query.eq('category_id', categoryId);
@@ -66,8 +67,9 @@ class ItemsRepository {
   Future<ItemModel> fetchItemById(String id) async {
     final row = await supabase
         .from(AppConstants.itemsTable)
-        .select('*, categories(name), item_images(image_url)')
+        .select('*, categories(name), item_images(image_url), profiles(full_name, username)')
         .eq('id', id)
+        .filter('deleted_at', 'is', null)
         .single();
     return ItemModel.fromMap(row);
   }
@@ -93,15 +95,39 @@ class ItemsRepository {
   /// Every item the signed-in user has ever posted, any status — used by
   /// "My reported items" in ProfileScreen. Unlike [fetchOpenItems], this
   /// deliberately isn't filtered to status = 'open', since someone should
-  /// be able to see their own resolved/claimed items too.
+  /// be able to see their own resolved/claimed items too. It *is* still
+  /// filtered to exclude their own deleted items, though — deleting a
+  /// post is meant to remove it from view for the person who deleted it
+  /// too, not just for everyone else.
   Future<List<ItemModel>> fetchMyItems() async {
     final userId = supabase.auth.currentUser!.id;
     final rows = await supabase
         .from(AppConstants.itemsTable)
         .select('*, categories(name), item_images(image_url)')
         .eq('user_id', userId)
+        .filter('deleted_at', 'is', null)
         .order('created_at', ascending: false);
     return rows.map(ItemModel.fromMap).toList();
+  }
+
+  /// Soft-delete: marks the item inactive rather than removing the row.
+  /// RLS no longer grants `delete` on `items` at all (see
+  /// 08_soft_delete.sql) — every "remove a post" path, owner or admin,
+  /// goes through this `deleted_at` flag instead, so the underlying data
+  /// always stays recoverable (a manual `update ... set deleted_at = null`
+  /// in the SQL editor is all it'd take to undo one). The existing
+  /// "users can update their own items" RLS policy already covers this
+  /// update — no new policy was needed.
+  ///
+  /// Every read this repository does (fetchOpenItems, fetchMyItems,
+  /// fetchItemById) already excludes `deleted_at is not null` rows, so a
+  /// soft-deleted item disappears from the app immediately, same as a
+  /// hard delete would have — the only difference is the row survives.
+  Future<void> deleteItem(String itemId) async {
+    await supabase
+        .from(AppConstants.itemsTable)
+        .update({'deleted_at': DateTime.now().toIso8601String()})
+        .eq('id', itemId);
   }
 
   Future<void> fileReport({required String itemId, required String reason}) async {
@@ -131,6 +157,8 @@ class ItemsRepository {
     double? latitude,
     double? longitude,
     String? locationLabel,
+    DateTime? eventTime,
+    List<double>? textEmbedding,
   }) async {
     final userId = supabase.auth.currentUser!.id;
 
@@ -148,6 +176,15 @@ class ItemsRepository {
           if (latitude != null && longitude != null)
             'location': 'POINT($longitude $latitude)',
           'location_label': locationLabel,
+          if (eventTime != null) 'event_time': eventTime.toIso8601String(),
+          // Included directly in the initial insert (rather than a
+          // follow-up update) whenever it resolved in time, so it's
+          // already present when the item_images insert below fires
+          // record_matches_for_image — meaning brand-new items get
+          // text-similarity-aware matches from their very first photo,
+          // not just on a later rescore. See TextEmbeddingService's doc
+          // for when this ends up null instead.
+          if (textEmbedding != null) 'text_embedding': textEmbedding,
         })
         .select()
         .single();

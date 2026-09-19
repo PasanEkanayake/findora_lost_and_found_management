@@ -1,0 +1,28 @@
+# Alternative to Dockerfile: builds only the text-embedding endpoint
+# (/embed/text — the one TextEmbeddingService actually calls today).
+# Skips tensorflow-cpu/opencv-python-headless entirely, so the image is
+# much smaller and the build can't hit the slow-connection timeout that
+# tensorflow-cpu's ~390MB wheel can (see requirements-image.txt). Use this
+# unless you specifically want /embed/image working too:
+#
+#   docker build -f Dockerfile.text-only -t findora-ai-service .
+#
+# /embed/image still exists on a service built this way — it just answers
+# every request with a 501 explaining TensorFlow/OpenCV aren't installed,
+# instead of the build failing or the service crashing on startup. See
+# main.py's guarded import of image_pipeline for how that's handled.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
+
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN python -c "import nltk; nltk.download('punkt_tab'); nltk.download('stopwords'); nltk.download('wordnet')"
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

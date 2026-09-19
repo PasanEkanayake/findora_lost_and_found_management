@@ -1,1 +1,12 @@
+# Only needed to run export_tflite_model.py once, to produce the .tflite
+# model + labels file assets/models/ needs — not a runtime dependency of
+# the app itself.
+#
+# tensorflow's wheel is ~350-400MB. On a slow/throttled connection, pip's
+# default read timeout can trip mid-download (it's a per-chunk-stall
+# timeout, not a total-time one, but a slow enough connection can still
+# stall past it) — if `pip install -r requirements.txt` times out here,
+# retry with a longer timeout; pip resumes from its cache rather than
+# starting the download over:
+#   pip install --default-timeout=1000 -r requirements.txt
 tensorflow>=2.15

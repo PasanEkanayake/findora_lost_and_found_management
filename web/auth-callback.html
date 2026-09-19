@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<!--
+  Findora — auth callback landing page.
+
+  This is where signup_screen.dart's `emailRedirectTo` points (see that
+  file), and it's what Supabase's own hosted "Confirm signup" link
+  ultimately 302-redirects the browser to *after* verifying the account
+  server-side. This page's only job is deciding what happens next:
+
+    - On a phone: hand off into the Findora app via its registered custom
+      URL scheme (io.supabase.findora://, already used for Google sign-in —
+      see login_screen.dart and AndroidManifest.xml's intent-filter). The
+      app is already configured to detect an auth session from that
+      incoming link automatically (supabase_flutter's default deep-link
+      handling), so no extra Dart code is needed to *consume* the link —
+      it just needs to reach the app in one piece, tokens/code and all.
+    - On a desktop browser: there's no app to hand off to, so just confirm
+      success and close the tab.
+
+  Deploy: upload this single file to the public `site` Storage bucket (see
+  supabase/07_email_confirmation.sql) and use its public URL as
+  `emailRedirectTo`. Any other static host (Firebase Hosting, Netlify,
+  GitHub Pages, S3) works exactly as well — this file has no server-side
+  dependency at all.
+
+  Known browser limitation: `window.close()` only works on a tab the
+  browser considers script-opened, which a tab opened by tapping a link in
+  a mail client often isn't — some browsers will silently no-op it. That's
+  a browser security restriction, not something fixable from page code, so
+  this page always shows a manual "Close this tab" affordance too rather
+  than depending on the automatic close succeeding.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Findora — Email confirmed</title>
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <style>
+    :root {
+      --primary: #1565D8;
+      --primary-dark: #0F4FA8;
+      --success: #2F8F5B;
+      --error: #BA1A1A;
+      --ink: #1C1C1E;
+      --muted: #6B7280;
+      --bg: #F4F6F8;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: var(--bg);
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      color: var(--ink);
+    }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: 100%; max-width: 420px;
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 12px 32px rgba(21, 101, 216, 0.12);
+      overflow: hidden;
+      text-align: center;
+    }
+    .header {
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      padding: 36px 24px 28px;
+      color: #fff;
+    }
+    .icon-badge {
+      width: 64px; height: 64px; margin: 0 auto 14px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.18);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px;
+    }
+    .brand { font-size: 20px; font-weight: 800; letter-spacing: 0.2px; }
+    .body { padding: 28px 28px 32px; }
+    h1 { font-size: 19px; margin: 0 0 10px; }
+    p.sub { font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0 0 22px; }
+    .btn {
+      display: inline-block; width: 100%;
+      background: var(--primary); color: #fff;
+      font-size: 15px; font-weight: 600; text-decoration: none;
+      padding: 14px 20px; border-radius: 12px; border: none; cursor: pointer;
+    }
+    .btn.secondary {
+      background: transparent; color: var(--primary);
+      border: 1.5px solid #D6E2F7; margin-top: 10px;
+    }
+    .spinner {
+      width: 22px; height: 22px; margin: 0 auto 14px;
+      border: 3px solid rgba(255,255,255,0.35);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+    .footer { font-size: 12px; color: #A3A9A5; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div id="headerIcon" class="spinner"></div>
+      <div class="brand">Findora</div>
+    </div>
+    <div class="body">
+      <div id="stateWorking">
+        <h1>Confirming your email…</h1>
+        <p class="sub">Just a moment.</p>
+      </div>
+
+      <div id="stateMobile" class="hidden">
+        <h1>Email confirmed ✓</h1>
+        <p class="sub">Opening the Findora app…</p>
+        <a id="openAppBtn" class="btn" href="#">Open Findora</a>
+      </div>
+
+      <div id="stateDesktop" class="hidden">
+        <h1>Email confirmed ✓</h1>
+        <p class="sub">Your account is ready. You can close this tab and sign in from the app.</p>
+        <button id="closeTabBtn" class="btn">Close this tab</button>
+      </div>
+
+      <div id="stateError" class="hidden">
+        <h1>Couldn't confirm this link</h1>
+        <p class="sub" id="errorDetail">
+          This confirmation link may have expired or already been used. Go back
+          to the Findora app and request a new one from the sign-in screen.
+        </p>
+      </div>
+
+      <div class="footer">Findora — reuniting people with their things.</div>
+    </div>
+  </div>
+
+  <script>
+    // Matches AndroidManifest.xml's intent-filter (scheme
+    // "io.supabase.findora", no host restriction) and the redirectTo
+    // already used for Google sign-in in login_screen.dart.
+    var APP_SCHEME = 'io.supabase.findora://email-confirmed';
+
+    function isMobile() {
+      var ua = navigator.userAgent || '';
+      return /Android|iPhone|iPad|iPod/i.test(ua);
+    }
+
+    function forwardParams() {
+      // Supabase appends auth data as either a query string (?code=... for
+      // PKCE) or a URL fragment (#access_token=... for the implicit flow,
+      // or #error=... on failure) — forward both untouched so whichever
+      // shape it used still reaches the app/gets parsed correctly.
+      return window.location.search + window.location.hash;
+    }
+
+    function paramsIndicateError() {
+      var combined = (window.location.search + window.location.hash).toLowerCase();
+      return combined.indexOf('error=') !== -1 || combined.indexOf('error_description=') !== -1;
+    }
+
+    function showState(id) {
+      ['stateWorking', 'stateMobile', 'stateDesktop', 'stateError'].forEach(function (s) {
+        document.getElementById(s).classList.toggle('hidden', s !== id);
+      });
+      document.getElementById('headerIcon').outerHTML =
+        id === 'stateError' ? '<div style="font-size:32px;">⚠️</div>' : '<div style="font-size:32px;">✅</div>';
+    }
+
+    function init() {
+      if (paramsIndicateError()) {
+        showState('stateError');
+        return;
+      }
+
+      var target = APP_SCHEME + forwardParams();
+
+      if (isMobile()) {
+        showState('stateMobile');
+        document.getElementById('openAppBtn').setAttribute('href', target);
+        // Attempt the handoff automatically; the visible button above is
+        // the fallback if the OS doesn't intercept this on its own (e.g.
+        // opened inside an in-app browser that blocks custom schemes).
+        window.location.href = target;
+      } else {
+        showState('stateDesktop');
+        document.getElementById('closeTabBtn').addEventListener('click', function () {
+          window.close();
+        });
+        // Best-effort auto-close — see the file-level comment on why this
+        // can't be guaranteed to work, and why the button above exists.
+        setTimeout(function () { window.close(); }, 1800);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

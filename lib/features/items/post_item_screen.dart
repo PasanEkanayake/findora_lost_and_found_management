@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 
 import '../../core/location/current_location.dart';
+import '../../core/location/location_picker_screen.dart';
 import '../../core/ml/category_mapper.dart';
 import '../../core/ml/tflite_classifier.dart';
 import '../../core/ml/tflite_provider.dart';
@@ -44,6 +46,8 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
   double? _latitude;
   double? _longitude;
   String? _locationLabel;
+
+  DateTime? _eventTime;
 
   bool _isSubmitting = false;
 
@@ -88,6 +92,13 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
         _detectedConfidence = result.confidence;
       });
 
+      // Only offers a title, never overwrites one already typed — someone
+      // who started typing before the model finished shouldn't have their
+      // words replaced out from under them.
+      if (_titleController.text.trim().isEmpty) {
+        _titleController.text = _titleCaseFromLabel(result.label);
+      }
+
       if (_categoryId == null) {
         final suggestedName = mapImagenetLabelToCategory(result.label);
         final categories = await ref.read(categoriesProvider.future);
@@ -103,6 +114,18 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
     } finally {
       if (mounted) setState(() => _isSuggesting = false);
     }
+  }
+
+  /// "cellular_telephone" -> "Cellular Telephone" — a plain ImageNet label
+  /// isn't a title on its own, but it's a reasonable starting point the
+  /// person can edit rather than typing one from scratch.
+  String _titleCaseFromLabel(String rawLabel) {
+    return rawLabel
+        .replaceAll('_', ' ')
+        .split(' ')
+        .where((w) => w.isNotEmpty)
+        .map((w) => w[0].toUpperCase() + w.substring(1))
+        .join(' ');
   }
 
   void _showPhotoSourceSheet() {
@@ -175,6 +198,51 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
     }
   }
 
+  /// Opens LocationPickerScreen to fine-tune the pin dropped by
+  /// [_detectLocation] (or, if the person hasn't auto-detected yet, starts
+  /// centered on a reasonable fallback so "adjust manually" still works
+  /// without GPS ever having run).
+  Future<void> _adjustLocationOnMap() async {
+    final startLat = _latitude ?? 0.0;
+    final startLng = _longitude ?? 0.0;
+
+    final picked = await Navigator.of(context).push<PickedLocation>(
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(initialLatitude: startLat, initialLongitude: startLng),
+      ),
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _latitude = picked.latitude;
+      _longitude = picked.longitude;
+      _locationLabel = picked.label;
+    });
+  }
+
+  Future<void> _pickEventTime() async {
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _eventTime ?? now,
+      firstDate: DateTime(now.year - 2),
+      lastDate: now,
+    );
+    if (date == null || !mounted) return;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_eventTime ?? now),
+    );
+    if (!mounted) return;
+
+    setState(() {
+      _eventTime = time == null
+          ? DateTime(date.year, date.month, date.day)
+          : DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    });
+  }
+
   /// Classifies every kept photo right before upload — run here rather
   /// than eagerly per-pick so photos the user removes never get wasted
   /// inference time, and so it's a single obvious place to look if
@@ -211,6 +279,15 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
     try {
       final classifications = await _classifyAllPhotos();
 
+      // Best-effort and fully optional — see TextEmbeddingService's doc.
+      // Run after photo classification (not in parallel with it) so a
+      // slow/cold-starting AI service can't also compete with on-device
+      // inference for the same CPU cores.
+      final textEmbedding = await ref.read(textEmbeddingServiceProvider).tryEmbed(
+            title: _titleController.text.trim(),
+            description: _descriptionController.text.trim(),
+          );
+
       await ref.read(itemsRepositoryProvider).createItem(
             type: _type,
             title: _titleController.text.trim(),
@@ -223,6 +300,8 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
             latitude: _latitude,
             longitude: _longitude,
             locationLabel: _locationLabel,
+            eventTime: _eventTime,
+            textEmbedding: textEmbedding,
           );
 
       if (!mounted) return;
@@ -337,6 +416,22 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
                       )
                     : const Icon(Icons.location_on_outlined),
                 label: Text(_locationLabel ?? 'Add current location'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _adjustLocationOnMap,
+                icon: const Icon(Icons.edit_location_alt_outlined),
+                label: Text(_latitude == null ? 'Set location manually' : 'Adjust pin on map'),
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: _pickEventTime,
+                icon: const Icon(Icons.schedule_outlined),
+                label: Text(
+                  _eventTime == null
+                      ? 'When was it lost/found? (optional)'
+                      : DateFormat('MMM d, y · h:mm a').format(_eventTime!),
+                ),
               ),
               const SizedBox(height: 28),
               FilledButton(

@@ -1,5 +1,7 @@
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/ml/text_embedding_service.dart';
 import 'category_model.dart';
 import 'item_model.dart';
 import 'items_repository.dart';
@@ -7,6 +9,13 @@ import 'nearby_item_model.dart';
 
 final itemsRepositoryProvider = Provider<ItemsRepository>((ref) {
   return const ItemsRepository();
+});
+
+/// Reads AI_SERVICE_URL once at construction — see TextEmbeddingService's
+/// doc for how callers should treat a null/unset URL (not an error, just
+/// "text-similarity matching isn't available this session").
+final textEmbeddingServiceProvider = Provider<TextEmbeddingService>((ref) {
+  return TextEmbeddingService(dotenv.env['AI_SERVICE_URL']);
 });
 
 final categoriesProvider = FutureProvider<List<CategoryModel>>((ref) {

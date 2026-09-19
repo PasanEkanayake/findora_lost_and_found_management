@@ -14,6 +14,7 @@ import '../../features/home/item_feed_screen.dart';
 import '../../features/matches/matches_screen.dart';
 import '../../features/chat/chat_list_screen.dart';
 import '../../features/chat/chat_screen.dart';
+import '../../features/contact/contact_chat_screen.dart';
 import '../../features/profile/profile_screen.dart';
 import '../../features/items/item_detail_screen.dart';
 import '../../features/items/post_item_screen.dart';
@@ -77,6 +78,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/chat',
         builder: (context, state) => ChatScreen(args: state.extra as ChatScreenArgs),
+      ),
+      GoRoute(
+        path: '/contact-chat',
+        builder: (context, state) => ContactChatScreen(args: state.extra as ContactChatArgs),
       ),
       GoRoute(
         path: '/item/:id',

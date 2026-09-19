@@ -1,11 +1,11 @@
 {
-    "name": "findora",
-    "short_name": "findora",
+    "name": "Findora — Lost & Found",
+    "short_name": "Findora",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#FFFFFF",
+    "theme_color": "#1565D8",
+    "description": "Report, browse, and get matched on lost and found items using on-device AI.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -1,0 +1,85 @@
+<!--
+  Findora — "Confirm signup" email template.
+
+  Paste this into Supabase Dashboard → Authentication → Email Templates →
+  "Confirm signup" (replace the whole "Message body" field), then set the
+  Subject heading field above it to: Confirm your email for Findora
+
+  Template variables ({{ .ConfirmationURL }}, {{ .Email }}) are filled in by
+  Supabase itself — leave them exactly as-is.
+
+  {{ .ConfirmationURL }} already carries a `redirect_to` pointing wherever
+  `emailRedirectTo` was set to on signUp() (see signup_screen.dart) — this
+  is the app's own auth-callback page (web/auth-callback.html), which
+  redirects into the app on mobile and auto-closes the tab on desktop. See
+  web/auth-callback.html and its comments for details, and make sure the
+  hosted URL of that page is added under Authentication → URL Configuration
+  → Redirect URLs, or Supabase will reject the redirect.
+-->
+<div style="margin:0;padding:0;background-color:#F4F6F8;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#F4F6F8;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;width:100%;background-color:#FFFFFF;border-radius:16px;overflow:hidden;">
+
+          <!-- Header -->
+          <tr>
+            <td style="background-color:#1565D8;padding:32px 32px 24px 32px;text-align:center;">
+              <div style="font-size:24px;font-weight:800;color:#FFFFFF;letter-spacing:0.2px;">Findora</div>
+              <div style="font-size:13px;color:#DCE8FF;margin-top:4px;">The Smart Lost &amp; Found</div>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:36px 32px 8px 32px;">
+              <h1 style="margin:0 0 12px 0;font-size:20px;color:#1C1C1E;">Confirm your email</h1>
+              <p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#3C3C43;">
+                Welcome to Findora! We use on-device AI to help match lost items
+                with the people who found them — but first, let's make sure this
+                is really your email address.
+              </p>
+            </td>
+          </tr>
+
+          <!-- CTA -->
+          <tr>
+            <td style="padding:0 32px 28px 32px;text-align:center;">
+              <a href="{{ .ConfirmationURL }}"
+                 style="display:inline-block;background-color:#1565D8;color:#FFFFFF;
+                        font-size:15px;font-weight:600;text-decoration:none;
+                        padding:14px 32px;border-radius:12px;">
+                Confirm email address
+              </a>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 32px 32px 32px;">
+              <p style="margin:0;font-size:13px;line-height:1.6;color:#8A8A8E;">
+                On your phone, this opens straight back into the Findora app.
+                On a computer, you can just close the tab once it confirms.
+              </p>
+              <p style="margin:16px 0 0 0;font-size:13px;line-height:1.6;color:#8A8A8E;">
+                If the button above doesn't work, copy and paste this link into
+                your browser:<br/>
+                <a href="{{ .ConfirmationURL }}" style="color:#1565D8;word-break:break-all;">{{ .ConfirmationURL }}</a>
+              </p>
+              <p style="margin:16px 0 0 0;font-size:13px;line-height:1.6;color:#8A8A8E;">
+                Didn't create a Findora account? You can safely ignore this email.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px 32px;background-color:#FAFAF8;text-align:center;border-top:1px solid #ECECEC;">
+              <div style="font-size:12px;color:#A3A9A5;">Findora — reuniting people with their things.</div>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</div>

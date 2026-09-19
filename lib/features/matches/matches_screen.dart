@@ -172,6 +172,12 @@ class _MatchCard extends ConsumerWidget {
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                       ),
+                      if (match.imageSimilarity != null ||
+                          match.textSimilarity != null ||
+                          match.distanceMeters != null) ...[
+                        const SizedBox(height: 4),
+                        _ScoreBreakdown(match: match),
+                      ],
                     ],
                   ),
                 ),
@@ -226,6 +232,40 @@ class _MatchCard extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// "📷 92% · 📝 78% · 📍 1.2 km" — the ingredients behind the headline
+/// "XX% match" figure, shown only for whichever signals this particular
+/// pair actually has (see MatchModel's doc on why each is independently
+/// nullable). Distance is shown in real units rather than as another
+/// percentage, since "1.2 km apart" is more immediately meaningful than a
+/// GPS proximity score would be on its own.
+class _ScoreBreakdown extends StatelessWidget {
+  const _ScoreBreakdown({required this.match});
+
+  final MatchModel match;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final parts = <String>[];
+
+    if (match.imageSimilarity != null) {
+      parts.add('📷 ${(match.imageSimilarity! * 100).round()}%');
+    }
+    if (match.textSimilarity != null) {
+      parts.add('📝 ${(match.textSimilarity! * 100).round()}%');
+    }
+    if (match.distanceMeters != null) {
+      final km = match.distanceMeters! / 1000;
+      parts.add(km < 1 ? '📍 ${match.distanceMeters!.round()} m' : '📍 ${km.toStringAsFixed(1)} km');
+    }
+
+    return Text(
+      parts.join('  ·  '),
+      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
     );
   }
 }

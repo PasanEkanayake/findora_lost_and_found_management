@@ -28,7 +28,10 @@ class AdminReportsScreen extends ConsumerWidget {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Remove this item?'),
-        content: Text('"${report.itemTitle}" will be deleted permanently.'),
+        content: Text(
+          '"${report.itemTitle}" will be taken down and hidden from the app. '
+          "It isn't permanently erased.",
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),

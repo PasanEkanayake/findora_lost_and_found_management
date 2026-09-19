@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/providers/auth_providers.dart';
 import '../../core/supabase/supabase_client.dart';
+import '../../core/theme/theme_mode_controller.dart';
 import 'data/profile_providers.dart';
 
 /// Account screen. The header reflects the real signed-in user and their
@@ -125,6 +126,7 @@ class ProfileScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/profile/privacy-safety'),
           ),
+          const _AppearanceTile(),
           ListTile(
             leading: const Icon(Icons.help_outline),
             title: const Text('Help & support'),
@@ -155,6 +157,93 @@ class ProfileScreen extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Manual light/dark/system picker (see item 14) — a ListTile that opens a
+/// small dialog rather than cycling through a single toggle icon, so all
+/// three states (including "match device") stay a single tap away and
+/// visible at once rather than needing to be cycled through blind.
+class _AppearanceTile extends ConsumerWidget {
+  const _AppearanceTile();
+
+  String _label(ThemeMode mode) {
+    switch (mode) {
+      case ThemeMode.light:
+        return 'Light';
+      case ThemeMode.dark:
+        return 'Dark';
+      case ThemeMode.system:
+        return 'System default';
+    }
+  }
+
+  IconData _icon(ThemeMode mode) {
+    switch (mode) {
+      case ThemeMode.light:
+        return Icons.light_mode_outlined;
+      case ThemeMode.dark:
+        return Icons.dark_mode_outlined;
+      case ThemeMode.system:
+        return Icons.brightness_auto_outlined;
+    }
+  }
+
+  Future<void> _pick(BuildContext context, WidgetRef ref, ThemeMode current) async {
+    final theme = Theme.of(context);
+    final selected = await showDialog<ThemeMode>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Appearance'),
+        children: [
+          for (final mode in ThemeMode.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, mode),
+              child: Row(
+                children: [
+                  Icon(
+                    _icon(mode),
+                    size: 20,
+                    color: mode == current ? theme.colorScheme.primary : null,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      _label(mode),
+                      style: mode == current
+                          ? TextStyle(
+                              color: theme.colorScheme.primary, fontWeight: FontWeight.w600)
+                          : null,
+                    ),
+                  ),
+                  if (mode == current) Icon(Icons.check, size: 18, color: theme.colorScheme.primary),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected != null) {
+      await ref.read(themeModeProvider.notifier).setThemeMode(selected);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(themeModeProvider);
+    return ListTile(
+      leading: Icon(_icon(mode)),
+      title: const Text('Appearance'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(_label(mode), style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(width: 4),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
+      onTap: () => _pick(context, ref, mode),
     );
   }
 }

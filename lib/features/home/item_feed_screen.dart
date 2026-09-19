@@ -7,10 +7,24 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'items_map_view.dart';
+import '../../core/providers/auth_providers.dart';
+import '../../core/widgets/new_badge.dart';
 import '../../core/widgets/shimmer_list.dart';
+import '../profile/data/profile_providers.dart';
 import '../items/data/category_model.dart';
 import '../items/data/item_model.dart';
 import '../items/data/items_providers.dart';
+
+/// Whether the Browse tab is currently showing the map instead of the
+/// list. Deliberately lives here as a provider rather than as local State
+/// on _ItemFeedScreenState: go_router's StatefulShellRoute keeps this
+/// screen mounted (just offscreen, inside an IndexedStack) when another
+/// bottom-nav tab is showing, so a plain State field would have no way to
+/// be reset from outside the widget. MainShell reads/writes this directly
+/// so tapping "Browse" in the bottom nav can always force it back to the
+/// list view, even if the map was left open — see MainShell's
+/// onDestinationSelected.
+final feedShowsMapProvider = StateProvider<bool>((ref) => false);
 
 /// The main "Browse" tab: a real Supabase-backed list with server-side
 /// category/keyword filtering, plus a map view toggled from the app bar.
@@ -24,7 +38,6 @@ class ItemFeedScreen extends ConsumerStatefulWidget {
 class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
   String? _selectedCategoryId;
   String _query = '';
-  bool _isMapView = false;
   Timer? _debounce;
 
   @override
@@ -40,19 +53,35 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
     });
   }
 
+  String get _greeting {
+    final hour = DateTime.now().hour;
+    if (hour < 5) return 'Still up?';
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    if (hour < 21) return 'Good evening';
+    return 'Good night';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final filter = ItemsFilter(categoryId: _selectedCategoryId, searchQuery: _query);
     final categoriesAsync = ref.watch(categoriesProvider);
+    final profileAsync = ref.watch(myProfileProvider);
+    final isSignedIn = ref.watch(currentUserProvider) != null;
+    final isMapView = ref.watch(feedShowsMapProvider);
 
     final toggleButton = IconButton(
-      icon: Icon(_isMapView ? Icons.list_outlined : Icons.map_outlined),
-      tooltip: _isMapView ? 'Show list' : 'Show map',
-      onPressed: () => setState(() => _isMapView = !_isMapView),
+      icon: Icon(isMapView ? Icons.list_outlined : Icons.map_outlined),
+      tooltip: isMapView ? 'Show list' : 'Show map',
+      onPressed: () => ref.read(feedShowsMapProvider.notifier).state = !isMapView,
+      style: IconButton.styleFrom(
+        backgroundColor: Colors.white.withValues(alpha: 0.18),
+        foregroundColor: Colors.white,
+      ),
     );
 
-    if (_isMapView) {
+    if (isMapView) {
       return Scaffold(
         appBar: AppBar(title: const Text('Findora'), actions: [toggleButton]),
         body: const ItemsMapView(),
@@ -60,19 +89,51 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
     }
 
     final itemsAsync = ref.watch(itemsFeedProvider(filter));
+    final firstName = isSignedIn
+        ? profileAsync.maybeWhen(
+            data: (p) => (p.fullName?.trim().isNotEmpty ?? false)
+                ? p.fullName!.trim().split(' ').first
+                : null,
+            orElse: () => null,
+          )
+        : null;
+
+    final lostCount = itemsAsync.maybeWhen(
+      data: (items) => items.where((i) => i.isLost).length,
+      orElse: () => null,
+    );
+    final foundCount = itemsAsync.maybeWhen(
+      data: (items) => items.where((i) => !i.isLost).length,
+      orElse: () => null,
+    );
 
     return Scaffold(
       body: RefreshIndicator(
         onRefresh: () => ref.refresh(itemsFeedProvider(filter).future),
         child: CustomScrollView(
           slivers: [
-            SliverAppBar.large(
-              title: const Text('Findora'),
-              actions: [toggleButton],
-              bottom: PreferredSize(
-                preferredSize: const Size.fromHeight(112),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            SliverAppBar(
+              pinned: true,
+              expandedHeight: 196,
+              actions: [Padding(padding: const EdgeInsets.only(right: 8), child: toggleButton)],
+              flexibleSpace: FlexibleSpaceBar(
+                background: _HeroHeader(
+                  greeting: _greeting,
+                  firstName: firstName,
+                  lostCount: lostCount,
+                  foundCount: foundCount,
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Transform.translate(
+                offset: const Offset(0, -22),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: theme.scaffoldBackgroundColor,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                  ),
+                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
                   child: Column(
                     children: [
                       TextField(
@@ -83,7 +144,7 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                           fillColor: theme.colorScheme.surfaceContainerHighest,
                         ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                       SizedBox(
                         height: 36,
                         child: categoriesAsync.when(
@@ -125,7 +186,7 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                   );
                 }
                 return SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
                   sliver: SliverList.separated(
                     itemCount: items.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -139,6 +200,109 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
       ),
     );
   }
+}
+
+/// The gradient hero panel behind the app bar — a time-aware greeting plus
+/// a one-glance summary of what's currently open, replacing what used to
+/// just be a plain "Findora" title over blank space.
+class _HeroHeader extends StatelessWidget {
+  const _HeroHeader({
+    required this.greeting,
+    required this.firstName,
+    required this.lostCount,
+    required this.foundCount,
+  });
+
+  final String greeting;
+  final String? firstName;
+  final int? lostCount;
+  final int? foundCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [theme.colorScheme.primary, theme.colorScheme.primaryContainer],
+        ),
+      ),
+      child: Stack(
+        children: [
+          // A couple of soft translucent circles for texture — cheap to
+          // draw, and it's the difference between "gradient rectangle" and
+          // something that feels designed.
+          Positioned(
+            top: -30,
+            right: -20,
+            child: _softCircle(120, Colors.white.withValues(alpha: 0.08)),
+          ),
+          Positioned(
+            bottom: -10,
+            right: 60,
+            child: _softCircle(60, Colors.white.withValues(alpha: 0.10)),
+          ),
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.travel_explore, color: Colors.white, size: 20),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Findora',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    firstName == null ? greeting : '$greeting, $firstName',
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    lostCount == null
+                        ? "Let's find what's missing."
+                        : '$lostCount lost · $foundCount found nearby right now',
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: Colors.white.withValues(alpha: 0.9)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _softCircle(double size, Color color) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      );
 }
 
 class _CategoryChipRow extends StatelessWidget {
@@ -212,6 +376,18 @@ class _FeedMessage extends StatelessWidget {
   }
 }
 
+/// "2m ago" / "3h ago" / "5d ago", falling back to a plain date past a
+/// week — noticeably easier to scan in a list than a full timestamp on
+/// every card, while staying precise for anything more than a few days old.
+String _relativeTime(DateTime time) {
+  final diff = DateTime.now().difference(time);
+  if (diff.inMinutes < 1) return 'Just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  if (diff.inDays < 7) return '${diff.inDays}d ago';
+  return DateFormat.MMMd().format(time);
+}
+
 class _ItemCard extends StatelessWidget {
   const _ItemCard({required this.item});
 
@@ -232,78 +408,123 @@ class _ItemCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(14),
                 child: SizedBox(
-                width: 64,
-                height: 64,
-                child: item.imageUrls.isEmpty
-                    ? Container(
-                        color: theme.colorScheme.surfaceContainerHighest,
-                        child: Icon(
-                          Icons.image_outlined,
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      )
-                    : CachedNetworkImage(
-                        imageUrl: item.imageUrls.first,
-                        fit: BoxFit.cover,
-                        placeholder: (context, url) => Container(
-                          color: theme.colorScheme.surfaceContainerHighest,
-                        ),
-                        errorWidget: (context, url, error) => Container(
+                  width: 72,
+                  height: 72,
+                  child: item.imageUrls.isEmpty
+                      ? Container(
                           color: theme.colorScheme.surfaceContainerHighest,
                           child: Icon(
-                            Icons.broken_image_outlined,
+                            Icons.image_outlined,
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
-                        ),
-                      ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: statusColor.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          item.isLost ? 'LOST' : 'FOUND',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: statusColor,
-                            fontWeight: FontWeight.w600,
+                        )
+                      : CachedNetworkImage(
+                          imageUrl: item.imageUrls.first,
+                          fit: BoxFit.cover,
+                          placeholder: (context, url) => Container(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                          ),
+                          errorWidget: (context, url, error) => Container(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
                           ),
                         ),
-                      ),
-                      if (item.categoryName != null) ...[
-                        const SizedBox(width: 8),
-                        Text(item.categoryName!, style: theme.textTheme.labelSmall),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(item.title, style: theme.textTheme.titleSmall),
-                  const SizedBox(height: 4),
-                  Text(
-                    [
-                      if (item.locationLabel != null) item.locationLabel!,
-                      DateFormat.MMMd().add_jm().format(item.createdAt),
-                    ].join(' · '),
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  ),
-                ],
+                ),
               ),
-            ),
-          ],
-        ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: statusColor.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                item.isLost ? Icons.search : Icons.volunteer_activism_outlined,
+                                size: 12,
+                                color: statusColor,
+                              ),
+                              const SizedBox(width: 3),
+                              Text(
+                                item.isLost ? 'LOST' : 'FOUND',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: statusColor,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (item.categoryName != null) ...[
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              item.categoryName!,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall
+                                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                            ),
+                          ),
+                        ],
+                        if (isRecentlyPosted(item.createdAt)) ...[
+                          const SizedBox(width: 6),
+                          const NewBadge(dense: true),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      item.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        if (item.locationLabel != null) ...[
+                          Icon(Icons.place_outlined,
+                              size: 13, color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 2),
+                          Flexible(
+                            child: Text(
+                              item.locationLabel!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                            ),
+                          ),
+                          Text(' · ',
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                        ],
+                        Text(
+                          _relativeTime(item.createdAt),
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant, size: 20),
+            ],
+          ),
         ),
       ),
     );
