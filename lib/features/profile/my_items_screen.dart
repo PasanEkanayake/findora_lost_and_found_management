@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../items/data/item_model.dart';
 import '../items/data/items_providers.dart';
+import '../../core/widgets/shimmer_list.dart';
 
 /// Every item the signed-in user has posted, regardless of status —
 /// reachable from ProfileScreen. Unlike the main feed, this shows
@@ -23,7 +24,7 @@ class MyItemsScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () => ref.refresh(myItemsProvider.future),
         child: itemsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
+          loading: () => const ShimmerCardList(),
           error: (_, __) => Center(
             child: Text(
               "Couldn't load your items.",
