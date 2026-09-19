@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../chat/chat_screen.dart';
 import '../chat/data/messages_providers.dart';
+import '../../core/widgets/shimmer_list.dart';
 import 'data/match_model.dart';
 import 'data/matches_providers.dart';
 
@@ -26,7 +27,7 @@ class MatchesScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () => ref.refresh(matchesProvider.future),
         child: matchesAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
+          loading: () => const ShimmerCardList(),
           error: (error, _) => _EmptyState(
             icon: Icons.error_outline,
             title: "Couldn't load matches",

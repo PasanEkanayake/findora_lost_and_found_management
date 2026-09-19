@@ -149,7 +149,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton.filled(onPressed: _send, icon: const Icon(Icons.send_rounded)),
+                  IconButton.filled(
+                    onPressed: _send,
+                    tooltip: 'Send message',
+                    icon: const Icon(Icons.send_rounded),
+                  ),
                 ],
               ),
             ),
@@ -251,6 +255,7 @@ class _LifecycleBanner extends ConsumerWidget {
                   for (var i = 1; i <= 5; i++)
                     IconButton(
                       onPressed: () => setState(() => stars = i),
+                      tooltip: '$i star${i == 1 ? '' : 's'}',
                       icon: Icon(
                         i <= stars ? Icons.star_rounded : Icons.star_border_rounded,
                         color: Theme.of(dialogContext).colorScheme.secondary,

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../supabase/supabase_client.dart';
 import '../widgets/main_shell.dart';
 import '../../features/splash/splash_screen.dart';
+import '../../features/onboarding/onboarding_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/signup_screen.dart';
 import '../../features/home/item_feed_screen.dart';
@@ -51,7 +52,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final isLoggedIn = supabase.auth.currentSession != null;
       final location = state.matchedLocation;
-      final isAuthRoute = location == '/login' || location == '/signup';
+      final isAuthRoute =
+          location == '/login' || location == '/signup' || location == '/onboarding';
 
       // Let the splash screen's own timer make the very first hop (it
       // reads currentSession itself) so the logo gets a moment on screen.
@@ -65,6 +67,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     },
     routes: [
       GoRoute(path: '/splash', builder: (context, state) => const SplashScreen()),
+      GoRoute(path: '/onboarding', builder: (context, state) => const OnboardingScreen()),
       GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
       GoRoute(path: '/signup', builder: (context, state) => const SignupScreen()),
       GoRoute(

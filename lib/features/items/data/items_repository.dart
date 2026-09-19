@@ -72,6 +72,24 @@ class ItemsRepository {
     return ItemModel.fromMap(row);
   }
 
+  /// Null if the item has no location set at all, rather than (0, 0) —
+  /// callers should treat null as "don't show a map", not "map of the
+  /// middle of the ocean".
+  Future<({double latitude, double longitude})?> fetchItemCoordinates(String itemId) async {
+    final rows = await supabase.rpc(
+      'get_item_coordinates',
+      params: {'p_item_id': itemId},
+    );
+    final list = rows as List<dynamic>;
+    if (list.isEmpty) return null;
+    final row = list.first as Map<String, dynamic>;
+    if (row['latitude'] == null || row['longitude'] == null) return null;
+    return (
+      latitude: (row['latitude'] as num).toDouble(),
+      longitude: (row['longitude'] as num).toDouble(),
+    );
+  }
+
   /// Every item the signed-in user has ever posted, any status — used by
   /// "My reported items" in ProfileScreen. Unlike [fetchOpenItems], this
   /// deliberately isn't filtered to status = 'open', since someone should

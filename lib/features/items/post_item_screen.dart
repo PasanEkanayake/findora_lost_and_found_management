@@ -251,6 +251,7 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
         title: const Text('Report an item'),
         leading: IconButton(
           icon: const Icon(Icons.close),
+          tooltip: 'Close',
           onPressed: () => context.pop(),
         ),
       ),
@@ -439,14 +440,27 @@ class _PhotoRow extends StatelessWidget {
                     ),
                   ),
                   Positioned(
-                    top: 4,
-                    right: 4,
-                    child: GestureDetector(
-                      onTap: () => onRemove(i),
-                      child: CircleAvatar(
-                        radius: 12,
-                        backgroundColor: Colors.black.withValues(alpha: 0.6),
-                        child: const Icon(Icons.close, size: 14, color: Colors.white),
+                    top: 0,
+                    right: 0,
+                    child: Semantics(
+                      label: 'Remove photo',
+                      button: true,
+                      child: GestureDetector(
+                        onTap: () => onRemove(i),
+                        behavior: HitTestBehavior.opaque,
+                        // Padding widens the actual tap target well beyond
+                        // the visible circle — full 48dp isn't achievable
+                        // here without overlapping the next thumbnail (only
+                        // 12px separates them), but this is a meaningful
+                        // improvement over the bare 24dp circle.
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: CircleAvatar(
+                            radius: 12,
+                            backgroundColor: Colors.black.withValues(alpha: 0.6),
+                            child: const Icon(Icons.close, size: 14, color: Colors.white),
+                          ),
+                        ),
                       ),
                     ),
                   ),

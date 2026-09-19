@@ -78,6 +78,11 @@ final itemDetailProvider = FutureProvider.autoDispose.family<ItemModel, String>(
   return ref.watch(itemsRepositoryProvider).fetchItemById(id);
 });
 
+final itemCoordinatesProvider = FutureProvider.autoDispose
+    .family<({double latitude, double longitude})?, String>((ref, itemId) {
+  return ref.watch(itemsRepositoryProvider).fetchItemCoordinates(itemId);
+});
+
 final myItemsProvider = FutureProvider.autoDispose<List<ItemModel>>((ref) {
   return ref.watch(itemsRepositoryProvider).fetchMyItems();
 });

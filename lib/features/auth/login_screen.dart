@@ -163,7 +163,12 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: GoogleFonts.manrope(
                         fontSize: 30,
                         fontWeight: FontWeight.w800,
-                        color: const Color(0xFF1565D8),
+                        // theme.colorScheme.primary, not a hardcoded hex —
+                        // Material 3 generates a lighter, higher-contrast
+                        // tone of the brand blue for dark mode
+                        // automatically; a fixed hex wouldn't adapt and
+                        // could end up low-contrast on a dark background.
+                        color: theme.colorScheme.primary,
                       ),
                     ),
                   ],
@@ -197,6 +202,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     labelText: 'Password',
                     prefixIcon: const Icon(Icons.lock_outline),
                     suffixIcon: IconButton(
+                      tooltip: _obscurePassword ? 'Show password' : 'Hide password',
                       icon: Icon(
                         _obscurePassword
                             ? Icons.visibility_outlined

@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import 'chat_screen.dart';
 import 'data/conversation_model.dart';
+import '../../core/widgets/shimmer_list.dart';
 import 'data/messages_providers.dart';
 
 /// Lists one entry per confirmed match, via `my_conversations()`. A chat
@@ -23,7 +24,7 @@ class ChatListScreen extends ConsumerWidget {
       body: RefreshIndicator(
         onRefresh: () => ref.refresh(conversationsProvider.future),
         child: conversationsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
+          loading: () => const ShimmerTileList(),
           error: (_, __) => _EmptyState(
             icon: Icons.error_outline,
             title: "Couldn't load chats",

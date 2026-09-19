@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'items_map_view.dart';
+import '../../core/widgets/shimmer_list.dart';
 import '../items/data/category_model.dart';
 import '../items/data/item_model.dart';
 import '../items/data/items_providers.dart';
@@ -102,7 +103,7 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
             ),
             itemsAsync.when(
               loading: () => const SliverFillRemaining(
-                child: Center(child: CircularProgressIndicator()),
+                child: ShimmerCardList(),
               ),
               error: (error, _) => SliverFillRemaining(
                 child: _FeedMessage(
