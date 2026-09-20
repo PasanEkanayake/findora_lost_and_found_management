@@ -17,29 +17,47 @@ jump straight to **"Troubleshooting Gradle errors"** in Part A.
 
 ## What's new since the original build
 
-A later upgrade pass added the following. Everything below degrades
-gracefully if you skip its setup step — the app still runs — but you'll
-miss the feature until you do:
+A later upgrade pass added the following.
+
+⚠️ **`05_multimodal_matching.sql` and `08_soft_delete.sql` are not
+optional** — unlike everything else in this section, skipping them
+doesn't just mean missing a feature, it **breaks browsing and posting
+outright**. `08_soft_delete.sql` adds `items.deleted_at`, and the updated
+app code filters every item read (the main feed, My Items, item detail)
+on that column existing — run this update's Dart/Flutter code against a
+database that hasn't had `08_soft_delete.sql` applied yet, and
+`items.deleted_at` doesn't exist, so those queries fail outright and
+**the browse feed appears empty** (really: failed to load) even though
+your posts are still sitting in the database untouched.
+`05_multimodal_matching.sql` similarly adds `items.event_time`, which
+posting a new item with a lost/found time set will now try to write —
+without that migration, that specific post attempt fails the same way.
+If you've pulled this update's code but haven't touched Supabase yet,
+**run those two migrations before testing anything**
+(`06_contact_messaging.sql` and `07_email_confirmation.sql` are
+genuinely optional — see their own rows below).
 
 | Feature | What changed | Setup needed? |
 |---|---|---|
-| Delete your own posts | Owner-only "Delete post" (item detail's menu, swipe-to-delete in My Items) — now a **soft delete**, see below | Run `supabase/08_soft_delete.sql` |
+| Delete your own posts | Owner-only "Delete post" (item detail's menu, swipe-to-delete in My Items) — now a **soft delete**, see below | **Required:** run `supabase/08_soft_delete.sql` |
 | Home screen header | Gradient greeting header with a live lost/found count, replacing the old blank title bar | None |
 | CNN photo auto-fill | Now also suggests a **title**, not just category | None |
-| Lost/found time | Optional date+time picker when posting | Run `supabase/05_multimodal_matching.sql` |
-| Contact any poster | New "Contact poster" direct-message thread, separate from the confirmed-match chat (Chats tab now has two tabs) | Run `supabase/06_contact_messaging.sql` |
-| Multimodal matching | Match score now blends image (CNN), text (NLP), and GPS proximity, not just image | Run `supabase/05_multimodal_matching.sql`; optionally deploy `ai_service/` for the text signal |
-| App icon | Same logo, white background instead of light blue | None — already regenerated. Re-run `python3 scripts/generate_icon_pngs.py` only if you change the logo |
-| Email confirmation UX | Branded confirm email, opens the app on mobile / closes the tab on desktop, plus a second "you're verified" email | See "Email confirmation flow" below — several manual steps |
+| Lost/found time | Optional date+time picker when posting | **Required:** run `supabase/05_multimodal_matching.sql` |
+| Contact any poster | New "Contact poster" direct-message thread, separate from the confirmed-match chat (Chats tab now has two tabs) | Optional — run `supabase/06_contact_messaging.sql`; skipping it just makes "Contact poster" show an error snackbar, nothing else breaks |
+| Multimodal matching | Match score now blends image (CNN), text (NLP), and GPS proximity, not just image | **Required:** run `supabase/05_multimodal_matching.sql`; optionally also deploy `ai_service/` for the text signal |
+| App icon | Same logo, white background instead of light blue | None — already regenerated. Re-run `python scripts/generate_icon_pngs.py` only if you change the logo |
+| Email confirmation UX | Branded confirm email, opens the app on mobile / closes the tab on desktop, plus a second "you're verified" email | Optional — see "Email confirmation flow" below; skipping it just means Supabase's plain default confirmation email/redirect is used instead |
 | Password strength | Live checklist + 5 rules enforced on signup | None |
 | Manual location pin | "Adjust pin on map" alongside GPS auto-detect when posting | None |
 | Exit confirmation | Back button on the Browse tab's root now asks before closing the app | None |
 | Light/dark theme toggle | Profile → Appearance — Light/Dark/System, persisted | None |
-| Soft delete | Deleting a post (by its owner or an admin) now hides it instead of removing the row — see "Soft delete: items are hidden, never erased" below | Run `supabase/08_soft_delete.sql` |
+| Soft delete | Deleting a post (by its owner or an admin) now hides it instead of removing the row — see "Soft delete: items are hidden, never erased" below | **Required:** run `supabase/08_soft_delete.sql` |
 | "NEW" badge | Items posted within the last 3 days show a NEW pill on their card and detail page | None |
 | Browse tab always goes home | Tapping "Browse" in the bottom nav now always shows the list, even if the map view was left open | None |
 
-New/changed SQL files, run in order after `04_storage_setup.sql`:
+New/changed SQL files, run **in order** after `04_storage_setup.sql` —
+`05` and `08` are required, `06`/`07` are optional but harmless to run
+anyway:
 `05_multimodal_matching.sql`, `06_contact_messaging.sql`,
 `07_email_confirmation.sql` (the last one has manual placeholders to fill
 in — see its header comment and "Email confirmation flow" below),
@@ -266,8 +284,13 @@ redesign `assets/images/logo.png` and want to regenerate every launcher
 icon (Android, adaptive icon foreground, web/PWA, favicon) from it:
 
 ```bash
-python3 scripts/generate_icon_pngs.py
+python scripts/generate_icon_pngs.py
 ```
+
+(Every Python command in this README uses `python` — that's what
+Windows' official installer registers. On macOS/Linux, `python` is
+sometimes missing or points to Python 2, so use `python3` there instead
+if `python` doesn't work.)
 
 or, equivalently for just the Android files, the standard Flutter tool:
 
@@ -327,6 +350,15 @@ In VS Code:
    landing on the splash screen and then the login screen.
 
 If step 3 fails with a Gradle-related error, continue to the next section.
+
+**A note on AI features specifically**: the app runs and every non-AI
+feature works fine straight away, but `assets/models/` doesn't ship a
+pretrained model file (it's too large to commit) — until you run
+"Generating the on-device model (Phase 4)" in Part B below, photo
+auto-tagging when posting an item and image-based matching just silently
+don't do anything (this is by design — see `core/ml/tflite_provider.dart`
+— not a crash, just a missing optional capability). Nothing else in the
+app depends on it.
 
 ## A7. Troubleshooting Gradle errors
 
@@ -575,7 +607,7 @@ automatically rather than needing per-screen updates.
 To regenerate every launcher/PWA icon after changing the logo:
 
 ```bash
-python3 scripts/generate_icon_pngs.py
+python scripts/generate_icon_pngs.py
 ```
 
 See `assets/images/README.md` for details on what each output is used
@@ -1110,12 +1142,20 @@ project's mobile-handoff/auto-close/welcome-email additions):
    Google sign-in (supabase_flutter's built-in deep-link handling picks
    up the auth data automatically — no extra Dart code needed); on
    desktop it shows success and closes the tab (best-effort — see the
-   file's comment on why `window.close()` can't be guaranteed). Host it
-   by running `supabase/07_email_confirmation.sql` (creates a public
-   `site` Storage bucket) and uploading this one file to that bucket, or
-   on any other static host — then set both its public URL and
-   `AUTH_CALLBACK_URL` in `.env` to that same URL, and add it under
-   Authentication → URL Configuration → Redirect URLs.
+   file's comment on why `window.close()` can't be guaranteed). To host
+   it and get the URL that goes in `AUTH_CALLBACK_URL`:
+   1. Run `supabase/07_email_confirmation.sql` if you haven't yet — it
+      creates a public Storage bucket named `site`.
+   2. Dashboard → **Storage** → **site** → **Upload file** →
+      pick `web/auth-callback.html` from this project.
+   3. Click the uploaded file in that list → its details panel has a
+      **Copy URL** button (or a **⋮** menu → **Get URL**, depending on
+      dashboard version) — that's the public URL, something like
+      `https://<your-project-ref>.supabase.co/storage/v1/object/public/site/auth-callback.html`.
+   4. Paste that exact URL as `AUTH_CALLBACK_URL` in `.env`, **and**
+      add it under Dashboard → **Authentication** → **URL
+      Configuration** → **Redirect URLs** — Supabase rejects an
+      `emailRedirectTo` that isn't on that allow-list.
 3. **Follow-up "you're confirmed!" email** — `07_email_confirmation.sql`
    adds a trigger that fires the moment `auth.users.email_confirmed_at`
    is first set, calling the `send-welcome-email` Edge Function (Resend

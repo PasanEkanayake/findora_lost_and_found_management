@@ -2,6 +2,18 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# See main.py's top for the full explanation: `transformers` (a
+# sentence-transformers dependency) auto-detects TensorFlow and wires up
+# TF-specific integration code that crashes against TensorFlow's Keras 3
+# unless the separate tf-keras shim is installed — which we don't need,
+# since text embedding here runs on PyTorch and image_pipeline.py talks
+# to TensorFlow directly, never through `transformers`. Set as a
+# container-wide ENV (not just in main.py) so it's also in effect for the
+# `RUN python -c "from sentence_transformers import ..."` pre-warm step
+# below, which would otherwise hit the exact same crash *during the
+# image build*, before main.py's own os.environ.setdefault ever runs.
+ENV USE_TF=0
+
 # libgl1/libglib2.0-0: OpenCV's imdecode needs these even in the
 # "headless" build, since headless only means "no GUI window support", not
 # "no image codec dependencies".

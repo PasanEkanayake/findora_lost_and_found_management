@@ -43,7 +43,37 @@ if you specifically want `/embed/image` working too:
 
 ```bash
 cd ai_service
-python3 -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+```
+
+Then activate it — this step is genuinely different per OS/shell, unlike
+everything else in this README:
+
+```powershell
+# Windows, PowerShell (VS Code's default integrated terminal)
+.venv\Scripts\Activate.ps1
+```
+```cmd
+:: Windows, Command Prompt
+.venv\Scripts\activate.bat
+```
+```bash
+# macOS/Linux, bash/zsh
+source .venv/bin/activate
+```
+
+If PowerShell refuses to run the `.ps1` script with an "execution
+policy" error, that's Windows blocking script execution by default, not
+a problem with this project — run this once (per PowerShell session, or
+permanently with `-Scope CurrentUser`) and try activating again:
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Once activated, your terminal prompt should be prefixed with `(.venv)`.
+From here on, every command in this README is identical on every OS:
+
+```bash
 pip install -r requirements.txt
 # Optional — see "Two install tiers" above:
 pip install -r requirements-image.txt
@@ -54,17 +84,72 @@ First run downloads the sentence-transformer model (~80MB) and NLTK's
 tokenizer/stopword/lemmatizer data (plus MobileNetV2, ~14MB, if you
 installed the image tier) — subsequent runs use the local cache.
 
-Test it:
+Test it — easiest is just opening this in any browser once the server's
+running, which also works identically on every OS:
+
+```
+http://localhost:8000/docs
+```
+
+That's FastAPI's interactive test page: expand **POST /embed/text**,
+click **Try it out**, edit the example JSON, hit **Execute** — no
+terminal syntax to get right at all. `http://localhost:8000/health` is
+also just a plain URL you can open directly.
+
+Prefer the terminal? The two examples below do the same request, but
+their exact syntax is one of the few genuinely OS-specific things left
+here — `curl`'s multi-line `\` continuation is bash/zsh syntax that
+PowerShell doesn't understand (and PowerShell's own built-in `curl` is
+actually an alias for `Invoke-WebRequest`, a different tool with
+different flags, which is a common source of confusion — the commands
+below sidestep that entirely):
 
 ```bash
+# macOS/Linux
 curl -X POST http://localhost:8000/embed/text \
   -H "Content-Type: application/json" \
   -d '{"title": "Blue Nike backpack", "description": "Left near Gate 3"}'
 ```
+```powershell
+# Windows, PowerShell
+Invoke-RestMethod -Uri "http://localhost:8000/embed/text" -Method Post `
+  -ContentType "application/json" `
+  -Body '{"title": "Blue Nike backpack", "description": "Left near Gate 3"}'
+```
 
-You should get back `{"embedding": [0.0123, -0.0456, ...]}` — 384 numbers.
-`curl http://localhost:8000/health` also reports whether the image tier
-ended up installed (`"image_embedding_available": true/false`).
+You should get back `{"embedding": [0.0123, -0.0456, ...]}` — 384 numbers
+(PowerShell's `Invoke-RestMethod` prints it slightly differently — an
+object you can dig into, e.g. `(...).embedding` — rather than raw JSON,
+but the data's the same). `/health` (also just openable in a browser)
+reports whether the image tier ended up installed too:
+`{"status": "ok", "image_embedding_available": true/false}`.
+
+### Troubleshooting: `ValueError: ... Keras 3 ... not yet supported in Transformers`
+
+Only happens if you installed **both** tiers (`requirements.txt` *and*
+`requirements-image.txt`) — not a bug in this project, but a real
+incompatibility between `transformers` (a `sentence-transformers`
+dependency) and TensorFlow 2.16+'s Keras 3: `transformers` auto-detects
+that TensorFlow is installed and tries to wire up TF-specific integration
+code that Keras 3 broke, even though nothing here actually needs that
+integration (text embedding runs on PyTorch; `image_pipeline.py` talks to
+TensorFlow/Keras directly, never through `transformers`).
+
+Already fixed in this repo — both `main.py` and `text_pipeline.py` set
+`USE_TF=0` before anything imports `transformers`, which tells it to skip
+TensorFlow detection entirely, and the Dockerfiles set the same thing as
+a container-wide `ENV`. If you're seeing this anyway (e.g. mid-session
+before restarting with the updated files), the fastest unblock is setting
+it directly and restarting:
+
+```powershell
+# PowerShell
+$env:USE_TF = "0"; uvicorn main:app --reload
+```
+```bash
+# bash/zsh
+USE_TF=0 uvicorn main:app --reload
+```
 
 ## Deploy it
 
@@ -100,6 +185,30 @@ That's it — `ItemsRepository.createItem` (via
 `TextEmbeddingService.tryEmbed`) starts calling `/embed/text` on every new
 post, and `supabase/05_multimodal_matching.sql`'s trigger picks up the
 stored embedding automatically.
+
+### Testing against a local server instead of deploying
+
+Skip "Deploy it" entirely and just run `uvicorn main:app --reload`
+locally (see "Run it locally" above) — but **`AI_SERVICE_URL=http://
+localhost:8000` only works if the Flutter app runs on the same machine
+as this service**, and it usually doesn't:
+
+- **Physical Android phone over USB** (this project's usual setup —
+  see the main README's A6): the phone is a separate device with its
+  own `localhost` that isn't your PC. Use your PC's LAN IP instead —
+  find it with `ipconfig` (Windows, look for "IPv4 Address") or
+  `ifconfig`/`ip addr` (macOS/Linux) — e.g.
+  `AI_SERVICE_URL=http://192.168.1.23:8000`. Phone and PC need to be on
+  the same Wi-Fi, and Windows Firewall may prompt to allow Python/
+  uvicorn through the first time you test it — allow it.
+- **Android emulator** on the same PC: emulators alias the host
+  machine as `10.0.2.2`, so `AI_SERVICE_URL=http://10.0.2.2:8000` reaches
+  a `uvicorn` instance running on your PC directly — no LAN/firewall
+  concerns here since it's not leaving the machine.
+
+Either way, remember `.env` is read once at app startup by
+`flutter_dotenv` — after changing `AI_SERVICE_URL`, fully restart
+(`flutter run` again), a hot reload alone won't pick it up.
 
 ## Why NLTK preprocessing before an already-pretrained embedding model
 

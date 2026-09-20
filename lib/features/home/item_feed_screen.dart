@@ -24,7 +24,25 @@ import '../items/data/items_providers.dart';
 /// so tapping "Browse" in the bottom nav can always force it back to the
 /// list view, even if the map was left open — see MainShell's
 /// onDestinationSelected.
-final feedShowsMapProvider = StateProvider<bool>((ref) => false);
+///
+/// A plain `Notifier<bool>` rather than `StateProvider<bool>`: Riverpod
+/// 3.x removed `StateProvider` entirely (folded into the unified
+/// `Notifier`/`NotifierProvider` API this project already uses for
+/// `ThemeModeController`) — this is that same pattern. Unlike the old
+/// `StateNotifier`/`StateProvider` APIs, `Notifier.state`'s setter is
+/// `@protected` (only callable from inside the notifier's own instance
+/// methods, not via `ref.read(provider.notifier).state = ...` from
+/// outside) — so external callers go through [setShowsMap] instead.
+class FeedMapViewController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void setShowsMap(bool value) => state = value;
+}
+
+final feedShowsMapProvider = NotifierProvider<FeedMapViewController, bool>(
+  FeedMapViewController.new,
+);
 
 /// The main "Browse" tab: a real Supabase-backed list with server-side
 /// category/keyword filtering, plus a map view toggled from the app bar.
@@ -74,7 +92,7 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
     final toggleButton = IconButton(
       icon: Icon(isMapView ? Icons.list_outlined : Icons.map_outlined),
       tooltip: isMapView ? 'Show list' : 'Show map',
-      onPressed: () => ref.read(feedShowsMapProvider.notifier).state = !isMapView,
+      onPressed: () => ref.read(feedShowsMapProvider.notifier).setShowsMap(!isMapView),
       style: IconButton.styleFrom(
         backgroundColor: Colors.white.withValues(alpha: 0.18),
         foregroundColor: Colors.white,

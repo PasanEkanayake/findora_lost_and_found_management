@@ -15,6 +15,15 @@ model this size, but a deliberate one, and it's the NLTK part of the
 
 from __future__ import annotations
 
+import os
+
+# See main.py's identical line for the full explanation — repeated here
+# (setdefault, so whichever of these two runs first "wins" and the other
+# is a harmless no-op) so this module is also safe to import directly
+# (e.g. `python text_pipeline.py`, or a standalone test) without going
+# through main.py first.
+os.environ.setdefault("USE_TF", "0")
+
 import re
 import string
 from functools import lru_cache

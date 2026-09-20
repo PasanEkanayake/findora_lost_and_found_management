@@ -17,7 +17,7 @@ To regenerate every launcher/PWA icon (Android mipmaps, adaptive icon
 foregrounds, web icons, favicon) straight from `logo.png`:
 
 ```bash
-python3 scripts/generate_icon_pngs.py
+python scripts/generate_icon_pngs.py
 ```
 
 This is also what was used to produce the current white-background icon

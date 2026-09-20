@@ -31,6 +31,26 @@ AI_SERVICE_URL.
 
 from __future__ import annotations
 
+import os
+
+# Must run before anything imports `transformers` (sentence-transformers'
+# dependency, imported by text_pipeline below) — `transformers` probes
+# whether TensorFlow is importable and, if so, eagerly wires up its TF
+# integration classes, which on a modern TensorFlow (Keras 3 by default
+# since TF 2.16) crashes with "Your currently installed version of Keras
+# is Keras 3, but this is not yet supported in Transformers" unless the
+# separate `tf-keras` compatibility shim is also installed. We don't need
+# any of that: text embedding here runs on PyTorch (sentence-transformers'
+# default backend), and image_pipeline.py talks to TensorFlow/Keras
+# directly, never through `transformers`. Setting USE_TF=0 tells
+# `transformers` to skip TF detection/integration entirely, so it's a
+# non-issue regardless of whether TensorFlow happens to also be installed
+# (e.g. from requirements-image.txt) in the same environment.
+# `setdefault` rather than a plain assignment so an operator who
+# deliberately wants this on can still override it via their own shell
+# env or the container's env before launch.
+os.environ.setdefault("USE_TF", "0")
+
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel

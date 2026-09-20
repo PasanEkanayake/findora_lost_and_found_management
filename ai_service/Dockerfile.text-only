@@ -16,6 +16,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Not strictly needed in this particular image (no TensorFlow installed
+# at all here), but set for consistency with Dockerfile and in case
+# someone extends this image later — see main.py's top for the full
+# explanation of what this prevents.
+ENV USE_TF=0
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
 

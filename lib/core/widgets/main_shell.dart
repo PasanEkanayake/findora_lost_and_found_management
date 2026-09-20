@@ -80,7 +80,7 @@ class MainShell extends ConsumerWidget {
             // done by ItemFeedScreen resetting its own state on init —
             // nothing re-inits it on a tab switch.
             if (index == 0) {
-              ref.read(feedShowsMapProvider.notifier).state = false;
+              ref.read(feedShowsMapProvider.notifier).setShowsMap(false);
             }
             navigationShell.goBranch(
               index,
