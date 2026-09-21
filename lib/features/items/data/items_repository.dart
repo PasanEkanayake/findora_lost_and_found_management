@@ -9,6 +9,13 @@ import 'category_model.dart';
 import 'item_model.dart';
 import 'nearby_item_model.dart';
 
+/// pgvector's own text input format is a plain bracketed, comma-separated
+/// list — e.g. "[0.1,0.2,0.3]" — accepted by a `vector` column's input
+/// parser regardless of how PostgREST would otherwise have encoded a raw
+/// Dart List`<`double`>` in the request body. See the two call sites' comments
+/// for why this matters.
+String _pgvectorLiteral(List<double> values) => '[${values.join(',')}]';
+
 /// Data access for everything under `items`/`item_images`/`categories`.
 class ItemsRepository {
   const ItemsRepository();
@@ -130,6 +137,38 @@ class ItemsRepository {
         .eq('id', itemId);
   }
 
+  /// Edits an existing item's text/category/location/time — not its
+  /// photos or type (lost/found): changing what something *is* mid-post
+  /// would undermine any matches already found against the original
+  /// photos, and Findora's matching is fundamentally photo-driven, so
+  /// letting the type flip is a bigger, separate feature (effectively
+  /// "delete and repost") rather than a same-item edit. Scoped this way,
+  /// existing matches/chats referencing this item stay valid throughout.
+  ///
+  /// RLS-wise this is covered by the same "users can update their own
+  /// items" policy `deleteItem` uses — no new policy needed. Whether the
+  /// caller actually owns [itemId] is enforced there, not in this method.
+  Future<void> updateItem({
+    required String itemId,
+    required String title,
+    String? description,
+    String? categoryId,
+    double? latitude,
+    double? longitude,
+    String? locationLabel,
+    DateTime? eventTime,
+  }) async {
+    await supabase.from(AppConstants.itemsTable).update({
+      'title': title,
+      'description': description,
+      'category_id': categoryId,
+      if (latitude != null && longitude != null)
+        'location': 'POINT($longitude $latitude)',
+      'location_label': locationLabel,
+      'event_time': eventTime?.toIso8601String(),
+    }).eq('id', itemId);
+  }
+
   Future<void> fileReport({required String itemId, required String reason}) async {
     await supabase.from(AppConstants.reportsTable).insert({
       'item_id': itemId,
@@ -184,7 +223,15 @@ class ItemsRepository {
           // text-similarity-aware matches from their very first photo,
           // not just on a later rescore. See TextEmbeddingService's doc
           // for when this ends up null instead.
-          if (textEmbedding != null) 'text_embedding': textEmbedding,
+          //
+          // Sent as pgvector's own text format ("[0.1,0.2,...]"), the
+          // same reasoning as 'location' above: PostgREST round-trips a
+          // Dart List<double> as a JSON array, and whether Postgres
+          // implicitly casts a JSON array to `vector` depends on
+          // PostgREST/Postgres version and isn't guaranteed — sending
+          // the column's own native text representation directly sidesteps
+          // that entirely, the same way 'POINT(...)' does for `geography`.
+          if (textEmbedding != null) 'text_embedding': _pgvectorLiteral(textEmbedding),
         })
         .select()
         .single();
@@ -210,13 +257,19 @@ class ItemsRepository {
       await supabase.from(AppConstants.itemImagesTable).insert({
         'item_id': itemId,
         'image_url': publicUrl,
-        // NOTE: inserting a Dart List<double> directly into a pgvector
-        // column works via PostgREST in the common case, since a JSON
-        // array's text form matches pgvector's own `[0.1,0.2,...]` input
-        // format — but this is untested against a live project in this
-        // sandbox, so verify it once you have a real device and model.
         if (classification != null) ...{
-          'embedding': classification.embedding,
+          // See the 'text_embedding' comment above — same fix, same
+          // reason. This one matters even more: record_matches_for_image
+          // (supabase/05_multimodal_matching.sql) skips matching entirely
+          // whenever `new.embedding is null`, so if this insert silently
+          // stored a malformed/null vector instead of erroring, AI
+          // matching would just never fire for that photo — no error
+          // anywhere, matches tab just stays empty. If matches still
+          // don't appear after this fix, check this column's actual
+          // value in the SQL editor
+          // (`select embedding from item_images order by created_at desc limit 5;`)
+          // to confirm it's a real vector and not null.
+          'embedding': _pgvectorLiteral(classification.embedding),
           'predicted_label': classification.label,
           'confidence': classification.confidence,
         },

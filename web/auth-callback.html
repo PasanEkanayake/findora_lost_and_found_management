@@ -17,11 +17,15 @@
     - On a desktop browser: there's no app to hand off to, so just confirm
       success and close the tab.
 
-  Deploy: upload this single file to the public `site` Storage bucket (see
-  supabase/07_email_confirmation.sql) and use its public URL as
-  `emailRedirectTo`. Any other static host (Firebase Hosting, Netlify,
-  GitHub Pages, S3) works exactly as well — this file has no server-side
-  dependency at all.
+  Deploy: a real static host — Cloudflare Pages, Netlify, GitHub Pages,
+  Firebase Hosting all work identically well, since this file has no
+  server-side dependency at all. See the main README's "Email
+  confirmation flow" section for exact steps. Supabase Storage can host
+  this too, but *only* if uploaded with an explicit `Content-Type:
+  text/html` (its Dashboard's drag-and-drop uploader doesn't give you
+  that control, and getting it wrong makes browsers display this file's
+  raw source as text instead of rendering it — the README covers the
+  REST-API workaround if you want to use Storage anyway).
 
   Known browser limitation: `window.close()` only works on a tab the
   browser considers script-opened, which a tab opened by tapping a link in
@@ -193,7 +197,7 @@
         });
         // Best-effort auto-close — see the file-level comment on why this
         // can't be guaranteed to work, and why the button above exists.
-        setTimeout(function () { window.close(); }, 1800);
+        setTimeout(function () { window.close(); }, 5000);
       }
     }
 

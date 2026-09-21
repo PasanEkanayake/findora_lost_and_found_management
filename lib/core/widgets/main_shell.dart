@@ -15,7 +15,10 @@ import '../../features/home/item_feed_screen.dart';
 /// item is relevant while browsing or checking matches, not while chatting
 /// or looking at your own profile, and a floating button sitting over
 /// every screen regardless of context reads as clutter rather than a
-/// clear call to action.
+/// clear call to action. It also hides specifically when Browse is
+/// showing its map view (see [feedShowsMapProvider]) — a full-screen map
+/// has no good place to float it, and "report an item" isn't a
+/// map-relevant action to begin with.
 ///
 /// Browse (branch 0) is the app's effective "home" — go_router's
 /// StatefulShellRoute keeps a separate navigation stack per tab, so a back
@@ -46,7 +49,12 @@ class MainShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final showFab = _branchesWithReportFab.contains(navigationShell.currentIndex);
+    // Map view (Browse tab) shows its own full-screen layout with no room
+    // for a floating action button sitting over it, and "report an item"
+    // isn't really a map-context action anyway — so the FAB hides
+    // specifically for that case, on top of the normal branch check.
+    final isBrowsingMap = navigationShell.currentIndex == 0 && ref.watch(feedShowsMapProvider);
+    final showFab = _branchesWithReportFab.contains(navigationShell.currentIndex) && !isBrowsingMap;
     final isOnHomeTab = navigationShell.currentIndex == 0;
 
     return PopScope(

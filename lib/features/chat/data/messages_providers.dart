@@ -18,7 +18,10 @@ final conversationsProvider = FutureProvider.autoDispose<List<ConversationModel>
 /// A genuine live subscription (unlike itemsFeedProvider/matchesProvider,
 /// which refetch on demand) — new messages should appear immediately
 /// without the person pulling to refresh a chat mid-conversation.
+/// Deliberately NOT autoDispose — see contactMessagesStreamProvider's doc
+/// (same pattern in ../../contact/data/contact_providers.dart) for why
+/// autoDispose on a live realtime stream causes visible flicker.
 final messagesStreamProvider =
-    StreamProvider.autoDispose.family<List<MessageModel>, String>((ref, matchId) {
+    StreamProvider.family<List<MessageModel>, String>((ref, matchId) {
   return ref.watch(messagesRepositoryProvider).streamMessages(matchId);
 });

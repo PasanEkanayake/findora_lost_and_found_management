@@ -114,10 +114,10 @@ class ItemDetailScreen extends ConsumerWidget {
   }
 }
 
-/// Owner-only overflow menu — currently just "Delete post", but kept as a
-/// menu rather than a bare icon button so a future "Edit" or "Mark as
-/// resolved" action has an obvious place to live without crowding the app
-/// bar with more icons.
+/// Owner-only overflow menu — "Edit post" and "Delete post", kept as a
+/// menu rather than bare icon buttons so a future "Mark as resolved"
+/// action has an obvious place to live too without crowding the app bar
+/// with more icons.
 class _OwnerMenu extends ConsumerWidget {
   const _OwnerMenu({required this.item});
 
@@ -157,9 +157,20 @@ class _OwnerMenu extends ConsumerWidget {
     return PopupMenuButton<String>(
       tooltip: 'More',
       onSelected: (value) {
+        if (value == 'edit') context.push('/edit-item', extra: item);
         if (value == 'delete') _delete(context, ref);
       },
       itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: 'edit',
+          child: Row(
+            children: [
+              Icon(Icons.edit_outlined, size: 20),
+              SizedBox(width: 12),
+              Text('Edit post'),
+            ],
+          ),
+        ),
         PopupMenuItem(
           value: 'delete',
           child: Row(
@@ -330,11 +341,18 @@ class _ItemDetailBodyState extends State<_ItemDetailBody> {
                   onPageChanged: (index) => setState(() => _currentPage = index),
                   children: [
                     for (final url in item.imageUrls)
-                      CachedNetworkImage(
-                        imageUrl: url,
-                        fit: BoxFit.cover,
-                        placeholder: (context, url) =>
-                            Container(color: theme.colorScheme.surfaceContainerHighest),
+                      Container(
+                        // Fills whatever space BoxFit.contain leaves empty
+                        // around a non-16:9 photo, so showing the whole
+                        // image (not cropping it to fill the carousel)
+                        // doesn't look like a rendering glitch.
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        child: CachedNetworkImage(
+                          imageUrl: url,
+                          fit: BoxFit.contain,
+                          placeholder: (context, url) =>
+                              Container(color: theme.colorScheme.surfaceContainerHighest),
+                        ),
                       ),
                   ],
                 ),

@@ -527,11 +527,20 @@ class _PhotoRow extends StatelessWidget {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(14),
-                    child: Image.file(
-                      photos[i],
+                    child: Container(
                       width: 96,
                       height: 96,
-                      fit: BoxFit.cover,
+                      // Fills whatever space BoxFit.contain leaves empty
+                      // around a non-square photo (most phone photos
+                      // aren't square) — plain background color rather
+                      // than leaving it transparent/white, so a portrait
+                      // or landscape shot doesn't look like it has a
+                      // stray gap next to it.
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      child: Image.file(
+                        photos[i],
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ),
                   Positioned(

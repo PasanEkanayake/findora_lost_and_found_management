@@ -46,11 +46,32 @@ class _NotificationSettingsScreenState
   }
 
   Future<void> _requestPermission() async {
-    await FirebaseMessaging.instance.requestPermission();
-    await _loadPermissionStatus();
-    if (_osPermission == AuthorizationStatus.authorized) {
-      await registerPushTokenForCurrentUser();
-      ref.invalidate(myProfileProvider);
+    try {
+      await FirebaseMessaging.instance.requestPermission();
+      await _loadPermissionStatus();
+      if (_osPermission == AuthorizationStatus.authorized) {
+        await registerPushTokenForCurrentUser();
+        ref.invalidate(myProfileProvider);
+      }
+    } catch (e) {
+      // Same "Firebase not configured yet" case _loadPermissionStatus
+      // already handles — this button previously had no equivalent
+      // try/catch, so on a build without Firebase set up (see README,
+      // "Firebase setup for push notifications") tapping it threw
+      // silently: no crash, no feedback, the button just did nothing
+      // from the person's perspective. Surfacing it explicitly here
+      // instead.
+      debugPrint('Could not request notification permission: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              "Push notifications aren't set up on this build yet — "
+              'see the README\'s "Firebase setup for push notifications".',
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -63,6 +84,13 @@ class _NotificationSettingsScreenState
         await clearPushToken();
       }
       ref.invalidate(myProfileProvider);
+    } catch (e) {
+      debugPrint('Could not update push token: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't update that. Try again.")),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isTogglingPush = false);
     }

@@ -13,16 +13,23 @@ Usage:
     pip install -r requirements.txt
     python export_tflite_model.py
 
-Outputs, written next to this script:
-    mobilenet_v2_embedder.tflite
-    imagenet_labels.txt
-
-Copy both into the Flutter project's assets/models/ folder.
+Writes straight into the Flutter project's assets/models/ folder — no
+separate copy step, on purpose: that used to be a real trap. Both output
+files would land in this scripts/ folder, the script's own printout would
+say "copy both into assets/models/", and it was easy to run the script
+successfully, see no errors, and never do that last step — leaving
+assets/models/ still empty and AI matching silently never working, with
+nothing to indicate why. Writing directly to the real destination removes
+that whole failure mode.
 """
 
 import json
+from pathlib import Path
 
 import tensorflow as tf
+
+# scripts/export_tflite_model.py -> ../assets/models/
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "assets" / "models"
 
 
 def build_combined_model() -> tf.keras.Model:
@@ -49,7 +56,7 @@ def build_combined_model() -> tf.keras.Model:
     )
 
 
-def export_labels(path: str) -> None:
+def export_labels(path: Path) -> None:
     """Writes one ImageNet label per line, in the exact index order the
     model's classification output uses. Generated from Keras's own class
     index file rather than hand-typed, so it can't drift out of sync with
@@ -63,11 +70,12 @@ def export_labels(path: str) -> None:
 
     # class_index maps "0".."999" -> [wordnet_id, human_readable_label]
     labels = [class_index[str(i)][1] for i in range(len(class_index))]
-    with open(path, "w") as f:
-        f.write("\n".join(labels))
+    path.write_text("\n".join(labels))
 
 
 def main() -> None:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
     model = build_combined_model()
 
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
@@ -80,10 +88,10 @@ def main() -> None:
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
 
     tflite_model = converter.convert()
-    with open("mobilenet_v2_embedder.tflite", "wb") as f:
-        f.write(tflite_model)
+    model_path = OUTPUT_DIR / "mobilenet_v2_embedder.tflite"
+    model_path.write_bytes(tflite_model)
 
-    export_labels("imagenet_labels.txt")
+    export_labels(OUTPUT_DIR / "imagenet_labels.txt")
 
     # tflite_classifier.dart assumes output index 0 = embedding, index 1 =
     # classification. The converter *should* preserve the Keras outputs
@@ -95,8 +103,9 @@ def main() -> None:
     for i, detail in enumerate(interpreter.get_output_details()):
         print(f"  index {i}: shape={detail['shape']}, name={detail['name']}")
 
-    print("\nDone. Copy both output files into assets/models/.")
+    print(f"\nDone. Wrote both files directly to {OUTPUT_DIR} — nothing left to copy.")
 
 
 if __name__ == "__main__":
     main()
+

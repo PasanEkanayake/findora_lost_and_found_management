@@ -54,6 +54,11 @@ genuinely optional — see their own rows below).
 | Soft delete | Deleting a post (by its owner or an admin) now hides it instead of removing the row — see "Soft delete: items are hidden, never erased" below | **Required:** run `supabase/08_soft_delete.sql` |
 | "NEW" badge | Items posted within the last 3 days show a NEW pill on their card and detail page | None |
 | Browse tab always goes home | Tapping "Browse" in the bottom nav now always shows the list, even if the map view was left open | None |
+| Google signup confirmation | A first-time Google sign-in now lands on a "You're signed up!" screen before entering the app, instead of silently landing in /feed indistinguishably from a normal login | None — Google sign-in itself still needs its own setup, see "Google sign-in setup (Phase 2)" |
+| Edit posts | Owner-only "Edit post" (item detail's menu, next to Delete) — title, description, category, location, event time. Not photos or lost/found type — see `ItemsRepository.updateItem`'s doc for why | None |
+| Delete account | Profile → "Delete account" — soft-deletes their items, scrubs their name/photo/phone, blocks future sign-in. See "Account deletion" below for exactly what this does and doesn't do | **Required:** run `supabase/09_account_deletion.sql` |
+| Chat flicker fixed | Both message screens (confirmed-match chat and direct messages) no longer flicker mid-conversation — rewritten to update incrementally instead of re-fetching the whole list on every change | None |
+| AI matching fixed | Found and fixed the actual bug: photo embeddings were being sent in a format Postgres's `vector` type couldn't reliably parse, so no item ever had a usable embedding and matches could never be created | None — already fixed in code. **But also see "Generating the on-device model (Phase 4)" above** — a still-empty `assets/models/` is an equally common reason matches never appear, and is separate from this bug |
 
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
 `05` and `08` are required, `06`/`07` are optional but harmless to run
@@ -849,17 +854,55 @@ re-downloading from scratch): `pip install --default-timeout=1000 -r requirement
 This downloads pretrained MobileNetV2 (ImageNet) weights, wraps them so a
 single forward pass returns both a 1280-d embedding and a 1000-way
 classification, converts to TFLite with dynamic-range quantization, and
-writes `imagenet_labels.txt` directly from Keras's own class index file.
-Copy both output files into `assets/models/`.
+writes `imagenet_labels.txt` directly from Keras's own class index file
+— both files go **directly into `assets/models/`**, no separate copy
+step. (If you're working from a checkout old enough that the script's
+own printout says "copy both into assets/models/" instead, update
+`scripts/export_tflite_model.py` first — earlier versions wrote both
+files into `scripts/` itself and left the copy as a manual last step,
+which was very easy to skip without any error telling you so: the script
+finishes cleanly, `assets/models/` silently stays empty, and AI
+matching/auto-tagging just never do anything with no indication why.)
+
+**Verify it actually landed in the right place** — this exact "ran fine
+but the files ended up in the wrong folder" mistake is the single most
+common reason AI matching doesn't seem to work:
+```bash
+dir ..\assets\models
+```
+```bash
+# macOS/Linux
+ls ../assets/models
+```
+You should see `mobilenet_v2_embedder.tflite` (a few MB) and
+`imagenet_labels.txt` alongside the folder's own `README.md`. If those
+two are missing, the app has nothing to run on-device classification
+with, silently — see the next paragraph.
 
 **Before trusting it on-device**, check the script's printed output
 tensor order against the indices `tflite_classifier.dart`'s `classify()`
 method assumes (0 = embedding, 1 = classification) — swap them if
 predictions come back scrambled.
 
-Until you run this script, the app degrades gracefully: `PostItemScreen`
-catches the missing-model error and posts without AI matching rather
-than crashing.
+Until you run this script (and it's in `assets/models/`), the app
+degrades gracefully rather than crashing: `PostItemScreen` catches the
+missing-model error and posts without AI tagging — but that also means
+**no image embedding ever gets stored, so posted items can never be AI
+matched against anything**, silently, with no error surfaced anywhere in
+the app. If matches never appear no matter what you post, this — not a
+matching-logic bug — is the first thing to rule out. A quick way to
+confirm either way, run in the Supabase SQL Editor:
+```sql
+select id, item_id, embedding is not null as has_embedding, created_at
+from item_images
+order by created_at desc
+limit 10;
+```
+If `has_embedding` is `false` for items posted *after* you ran the
+export script and rebuilt the app, the model still isn't being found at
+runtime — double check the two files are really in `assets/models/`
+(not `assets/models/models/` or similar) and do a full `flutter run`
+again (not just hot reload — asset bundle changes need a full restart).
 
 ## How the AI matching actually works
 
@@ -1113,6 +1156,40 @@ a soft delete leaves `reports` rows untouched unless this does it
 explicitly, so without it they'd sit in the open queue forever pointing
 at an item that's already been taken down.
 
+## Account deletion
+
+Profile → "Delete account" calls the `request_account_deletion()` RPC
+(`supabase/09_account_deletion.sql`), which — for the same reason item
+deletion is a soft delete (see above) — doesn't run a real `delete from
+auth.users`: `profiles.id references auth.users(id) on delete cascade`,
+so that would cascade-delete their profile and leave every *other*
+user's matches/chats/reports referencing that id pointing at nothing.
+
+Instead it, all in one `security definer` function:
+1. Soft-deletes every item the account posted (same `items.deleted_at`
+   flag as a regular per-item delete).
+2. Clears `profiles.full_name`/`username`/`avatar_url`/`phone`/
+   `fcm_token` and sets a new `profiles.deleted_at` — the row survives,
+   but with nothing personal left on it. Existing chats/matches
+   referencing this user now just show "Findora user" wherever a name
+   would have appeared, via the `coalesce(full_name, username, 'Findora
+   user')` fallback already used in `my_contact_threads()` and similar.
+3. Sets `auth.users.banned_until` to 100 years out — the same column the
+   Admin API's "ban user" endpoint sets, reachable directly here because
+   `security definer` runs as the function's *owner* (the `postgres`
+   role, in a normal SQL-Editor-run migration), which has full access to
+   the `auth` schema — no service-role key or Edge Function needed, only
+   `security definer` plus deriving the target strictly from `auth.uid()`
+   (never a parameter, so there's no "ban someone else" version of this
+   to accidentally expose).
+
+The Flutter side calls `supabase.auth.signOut()` immediately after the
+RPC returns — banning blocks *future* sign-ins/token refreshes, but
+doesn't retroactively invalidate a JWT that's already been issued for
+the current session, so the explicit sign-out is what actually ends
+*this* session right away rather than leaving it valid until it happens
+to expire.
+
 ## "NEW" badge
 
 `core/widgets/new_badge.dart` defines `isRecentlyPosted(DateTime)` (true
@@ -1142,20 +1219,57 @@ project's mobile-handoff/auto-close/welcome-email additions):
    Google sign-in (supabase_flutter's built-in deep-link handling picks
    up the auth data automatically — no extra Dart code needed); on
    desktop it shows success and closes the tab (best-effort — see the
-   file's comment on why `window.close()` can't be guaranteed). To host
-   it and get the URL that goes in `AUTH_CALLBACK_URL`:
-   1. Run `supabase/07_email_confirmation.sql` if you haven't yet — it
-      creates a public Storage bucket named `site`.
-   2. Dashboard → **Storage** → **site** → **Upload file** →
-      pick `web/auth-callback.html` from this project.
-   3. Click the uploaded file in that list → its details panel has a
-      **Copy URL** button (or a **⋮** menu → **Get URL**, depending on
-      dashboard version) — that's the public URL, something like
-      `https://<your-project-ref>.supabase.co/storage/v1/object/public/site/auth-callback.html`.
-   4. Paste that exact URL as `AUTH_CALLBACK_URL` in `.env`, **and**
-      add it under Dashboard → **Authentication** → **URL
-      Configuration** → **Redirect URLs** — Supabase rejects an
-      `emailRedirectTo` that isn't on that allow-list.
+   file's comment on why `window.close()` can't be guaranteed).
+
+   **Hosting it — don't use Supabase Storage for this.** Storage is
+   built for arbitrary file/CDN delivery, not guaranteed HTML rendering,
+   and in practice it can serve an uploaded `.html` file with a
+   content-type that makes browsers display the raw source code as text
+   instead of rendering it as a page — confusing since the upload itself
+   "succeeds" with no error. Use a real static host instead — free,
+   and a couple of minutes each:
+
+   **Cloudflare Pages** (no git/account-linking needed, just a file):
+   1. https://pages.cloudflare.com → sign in (or create a free account)
+      → **Create a project** → **Upload assets**.
+   2. Drag in `web/auth-callback.html`. Rename it to `index.html` during
+      upload (drag-and-drop lets you rename before confirming) so it
+      serves at your project's root URL rather than a
+      `/auth-callback.html` sub-path — simpler to reference later,
+      though either works.
+   3. Deploy — you get a URL like `https://findora-auth.pages.dev`.
+   4. Use that URL as `AUTH_CALLBACK_URL` (see step 4 below).
+
+   Netlify Drop (https://app.netlify.com/drop) and GitHub Pages work
+   the same way if you'd rather use one of those.
+
+   **Prefer to keep this inside Supabase anyway?** It's possible, but
+   only via the Storage REST API with an explicit content-type — the
+   Dashboard's drag-and-drop uploader doesn't expose that control, which
+   is exactly what goes wrong:
+   ```powershell
+   # PowerShell — replace YOUR_PROJECT_REF and YOUR_SERVICE_ROLE_KEY
+   # (Project Settings → API Keys → service_role). Run
+   # supabase/07_email_confirmation.sql first if you haven't — it
+   # creates the public `site` bucket this targets.
+   $headers = @{
+     Authorization = "Bearer YOUR_SERVICE_ROLE_KEY"
+     "Content-Type" = "text/html"
+   }
+   Invoke-WebRequest `
+     -Uri "https://YOUR_PROJECT_REF.supabase.co/storage/v1/object/site/auth-callback.html?upsert=true" `
+     -Method Post -Headers $headers -InFile "web\auth-callback.html"
+   ```
+   Whichever host you use, open the resulting URL in a browser before
+   moving on — you should see a rendered "Confirming your email…" page,
+   not visible HTML markup. If you see markup (like the screenshot), the
+   content-type is still wrong.
+
+   Once you have a working URL:
+   1. Dashboard → **Authentication** → **URL Configuration** →
+      **Redirect URLs** → add it (Supabase rejects an `emailRedirectTo`
+      that isn't on this allow-list).
+   2. Paste the same URL as `AUTH_CALLBACK_URL` in `.env`.
 3. **Follow-up "you're confirmed!" email** — `07_email_confirmation.sql`
    adds a trigger that fires the moment `auth.users.email_confirmed_at`
    is first set, calling the `send-welcome-email` Edge Function (Resend

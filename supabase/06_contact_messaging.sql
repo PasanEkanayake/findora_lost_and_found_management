@@ -101,6 +101,33 @@ create policy "recipients can mark contact messages as read"
     )
   );
 
+-- The policy above only restricts WHO can update a row (either thread
+-- participant), not WHICH columns — Postgres RLS operates at row
+-- granularity, not column granularity, so without this a participant
+-- could technically rewrite `content`/`sender_id` on any message in the
+-- thread, including ones the *other* person sent. A trigger is the
+-- standard way to enforce column-level immutability in Postgres; this
+-- one allows `read_at` to change and rejects anything else.
+create or replace function public.protect_contact_message_immutable_fields()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.content is distinct from old.content
+    or new.sender_id is distinct from old.sender_id
+    or new.thread_id is distinct from old.thread_id
+    or new.created_at is distinct from old.created_at then
+    raise exception 'Only read_at can be updated on an existing contact message';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists contact_messages_protect_immutable_fields on public.contact_messages;
+create trigger contact_messages_protect_immutable_fields
+  before update on public.contact_messages
+  for each row execute function public.protect_contact_message_immutable_fields();
+
 -- ----------------------------------------------------------------------------
 -- start_contact_thread — idempotent: tapping "Contact poster" again on an
 -- item you already messaged about just re-opens the same thread rather

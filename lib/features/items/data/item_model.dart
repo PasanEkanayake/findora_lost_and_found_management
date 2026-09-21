@@ -14,6 +14,7 @@ class ItemModel {
     this.eventTime,
     this.imageUrls = const [],
     this.posterName,
+    this.categoryId,
   });
 
   final String id;
@@ -25,6 +26,13 @@ class ItemModel {
   final String? description;
   final String? categoryName;
   final String? locationLabel;
+
+  /// The raw `items.category_id` value — `select('*')` already returns
+  /// this column, it just wasn't being parsed into the model before,
+  /// since nothing needed to *re-submit* a category until item editing
+  /// did (EditItemScreen needs this to pre-select the right dropdown
+  /// entry; [categoryName] alone isn't enough to look the id back up).
+  final String? categoryId;
 
   /// When the item was actually lost/found, as reported by the poster —
   /// distinct from [createdAt] (when the report itself was posted), and
@@ -56,6 +64,7 @@ class ItemModel {
       title: map['title'] as String,
       description: map['description'] as String?,
       categoryName: categoryMap?['name'] as String?,
+      categoryId: map['category_id'] as String?,
       locationLabel: map['location_label'] as String?,
       createdAt: DateTime.parse(map['created_at'] as String),
       eventTime:

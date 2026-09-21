@@ -54,4 +54,15 @@ class ProfileRepository {
 
     return publicUrl;
   }
+
+  /// Calls request_account_deletion() (supabase/09_account_deletion.sql)
+  /// — see that function's own doc for exactly what it does (soft-deletes
+  /// their items, scrubs personal fields, blocks future sign-in) and why
+  /// it's not a real `delete from auth.users`. Doesn't sign the caller
+  /// out itself — ProfileScreen does that right after this returns, so
+  /// the current session ends immediately rather than lingering until
+  /// the ban takes effect on next token refresh.
+  Future<void> requestAccountDeletion() async {
+    await supabase.rpc('request_account_deletion');
+  }
 }

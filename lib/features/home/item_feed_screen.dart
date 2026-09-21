@@ -132,7 +132,7 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
           slivers: [
             SliverAppBar(
               pinned: true,
-              expandedHeight: 196,
+              expandedHeight: 208,
               actions: [Padding(padding: const EdgeInsets.only(right: 8), child: toggleButton)],
               flexibleSpace: FlexibleSpaceBar(
                 background: _HeroHeader(
@@ -145,7 +145,7 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
             ),
             SliverToBoxAdapter(
               child: Transform.translate(
-                offset: const Offset(0, -22),
+                offset: const Offset(0, -12),
                 child: Container(
                   decoration: BoxDecoration(
                     color: theme.scaffoldBackgroundColor,
@@ -274,12 +274,17 @@ class _HeroHeader extends StatelessWidget {
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(8),
+                        padding: const EdgeInsets.all(6),
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.18),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(Icons.travel_explore, color: Colors.white, size: 20),
+                        child: Image.asset(
+                          'assets/images/logo.png',
+                          width: 24,
+                          height: 24,
+                          fit: BoxFit.contain,
+                        ),
                       ),
                       const SizedBox(width: 10),
                       Text(

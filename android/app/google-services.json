@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "363102901256",
+    "project_id": "findora-91c1b",
+    "storage_bucket": "findora-91c1b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:363102901256:android:d0a8b149ca059e924e2dbd",
+        "android_client_info": {
+          "package_name": "com.example.findora"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDOL7NoKm9WzS1ls1Ep3B9qBXhUzJpHGs4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

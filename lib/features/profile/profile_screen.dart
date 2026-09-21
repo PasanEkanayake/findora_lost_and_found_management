@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import '../../core/providers/auth_providers.dart';
 import '../../core/supabase/supabase_client.dart';
 import '../../core/theme/theme_mode_controller.dart';
+import '../../core/widgets/confirm_dialog.dart';
+import '../items/data/items_providers.dart';
 import 'data/profile_providers.dart';
 
 /// Account screen. The header reflects the real signed-in user and their
@@ -14,6 +16,35 @@ import 'data/profile_providers.dart';
 /// renders for profiles.is_admin — RLS backs that up server-side too.
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
+
+  Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      icon: Icons.warning_amber_rounded,
+      title: 'Delete your account?',
+      message: 'This signs you out for good and removes your name, photo, and phone number. '
+          'Every item you posted is taken down too. This is not something you can undo '
+          'yourself afterward — if you change your mind later, you would need to contact '
+          'support.',
+      confirmLabel: 'Delete account',
+      isDestructive: true,
+    );
+    if (!confirmed || !context.mounted) return;
+
+    try {
+      await ref.read(profileRepositoryProvider).requestAccountDeletion();
+      ref.invalidate(itemsFeedProvider);
+      // No manual navigation needed — the router's redirect callback
+      // sends signed-out users to /login automatically, same as the
+      // plain "Sign out" button below.
+      await supabase.auth.signOut();
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't delete your account. Try again.")),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -154,6 +185,11 @@ class ProfileScreen extends ConsumerWidget {
               // callback sends signed-out users to /login automatically.
               await supabase.auth.signOut();
             },
+          ),
+          ListTile(
+            leading: Icon(Icons.delete_forever_outlined, color: theme.colorScheme.error),
+            title: Text('Delete account', style: TextStyle(color: theme.colorScheme.error)),
+            onTap: () => _deleteAccount(context, ref),
           ),
         ],
       ),

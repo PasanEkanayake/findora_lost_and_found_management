@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../providers/auth_providers.dart';
 import '../supabase/supabase_client.dart';
 import '../widgets/main_shell.dart';
 import '../../features/splash/splash_screen.dart';
 import '../../features/onboarding/onboarding_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/signup_screen.dart';
+import '../../features/auth/signup_welcome_screen.dart';
 import '../../features/home/item_feed_screen.dart';
 import '../../features/matches/matches_screen.dart';
 import '../../features/chat/chat_list_screen.dart';
@@ -17,6 +19,8 @@ import '../../features/chat/chat_screen.dart';
 import '../../features/contact/contact_chat_screen.dart';
 import '../../features/profile/profile_screen.dart';
 import '../../features/items/item_detail_screen.dart';
+import '../../features/items/edit_item_screen.dart';
+import '../../features/items/data/item_model.dart';
 import '../../features/items/post_item_screen.dart';
 import '../../features/profile/admin_reports_screen.dart';
 import '../../features/profile/edit_profile_screen.dart';
@@ -51,10 +55,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     initialLocation: '/splash',
     refreshListenable: GoRouterRefreshStream(supabase.auth.onAuthStateChange),
     redirect: (context, state) {
-      final isLoggedIn = supabase.auth.currentSession != null;
+      final session = supabase.auth.currentSession;
+      final isLoggedIn = session != null;
       final location = state.matchedLocation;
       final isAuthRoute =
           location == '/login' || location == '/signup' || location == '/onboarding';
+      final isWelcomeRoute = location == '/welcome';
 
       // Let the splash screen's own timer make the very first hop (it
       // reads currentSession itself) so the logo gets a moment on screen.
@@ -63,7 +69,20 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       if (location == '/splash') return null;
 
       if (!isLoggedIn && !isAuthRoute) return '/login';
-      if (isLoggedIn && isAuthRoute) return '/feed';
+
+      if (isLoggedIn) {
+        // See looksLikeFreshOAuthSignup's doc (auth_providers.dart) for
+        // what this detects and why; signupWelcomeSeenProvider stops it
+        // from re-triggering on every navigation for the rest of this
+        // same signup, since the account's timestamps don't change just
+        // because the person moved past the welcome screen.
+        final isFreshGoogleSignup = looksLikeFreshOAuthSignup(session.user) &&
+            !ref.read(signupWelcomeSeenProvider);
+
+        if (isFreshGoogleSignup) return isWelcomeRoute ? null : '/welcome';
+        if (isWelcomeRoute || isAuthRoute) return '/feed';
+      }
+
       return null;
     },
     routes: [
@@ -71,6 +90,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/onboarding', builder: (context, state) => const OnboardingScreen()),
       GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
       GoRoute(path: '/signup', builder: (context, state) => const SignupScreen()),
+      GoRoute(path: '/welcome', builder: (context, state) => const SignupWelcomeScreen()),
       GoRoute(
         path: '/post-item',
         builder: (context, state) => const PostItemScreen(),
@@ -86,6 +106,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/item/:id',
         builder: (context, state) => ItemDetailScreen(itemId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/edit-item',
+        builder: (context, state) => EditItemScreen(item: state.extra as ItemModel),
       ),
       GoRoute(
         path: '/admin/reports',

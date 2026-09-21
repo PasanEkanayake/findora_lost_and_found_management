@@ -28,18 +28,18 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- A public bucket to host web/auth-callback.html — the landing page the
--- confirmation email's link points at (see that file's own header comment
--- for what it does and why it needs to be a real HTTPS page rather than
--- opening the app's custom URL scheme directly). Using Storage for this
--- avoids needing separate web hosting (Firebase Hosting, Netlify, etc.)
--- just for one static file.
---
--- After running this, upload web/auth-callback.html via Dashboard →
--- Storage → site → Upload file, then use its public URL (Dashboard →
--- Storage → site → auth-callback.html → "..." → Get URL) as the
--- `emailRedirectTo` value in signup_screen.dart, and add that same URL
--- under Authentication → URL Configuration → Redirect URLs.
+-- A public bucket for web/auth-callback.html — the landing page the
+-- confirmation email's link points at (see that file's own header
+-- comment for what it does). Kept here mainly for the "site" bucket
+-- name/policy to already exist for anyone who wants to host that file
+-- via Supabase Storage — but the main README's "Email confirmation
+-- flow" section now recommends a real static host (Cloudflare Pages,
+-- Netlify, etc.) instead: Storage's Dashboard uploader doesn't let you
+-- set an explicit Content-Type, and getting that wrong makes browsers
+-- display the file's raw source as text instead of rendering it. If you
+-- still want to use Storage anyway, the README has the REST-API upload
+-- command that sets Content-Type correctly; this bucket is what it
+-- targets.
 -- ----------------------------------------------------------------------------
 insert into storage.buckets (id, name, public)
 values ('site', 'site', true)
