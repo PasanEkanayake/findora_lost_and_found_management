@@ -2,7 +2,14 @@
 -- Findora — Upgrade: self-service account deletion
 -- Run this after 08_soft_delete.sql.
 --
-
+-- "Delete my account" can't be a real `delete from auth.users` here, for
+-- the same reason item deletion isn't a real `delete from items` (see
+-- 08_soft_delete.sql's header): `profiles.id references auth.users(id)
+-- on delete cascade`, so hard-deleting the auth user would cascade-delete
+-- their profile — and everything else in the app (matches, chats,
+-- reports, other people's contact threads) that references that id by
+-- foreign key would be left pointing at nothing, breaking *other* users'
+-- history, not just this one's.
 --
 -- Instead, "delete account" here means: soft-delete everything they
 -- posted (same items.deleted_at flag the per-item delete uses), scrub
