@@ -17,6 +17,7 @@ class MatchModel {
     this.imageSimilarity,
     this.textSimilarity,
     this.distanceMeters,
+    this.timeProximity,
   });
 
   final String matchId;
@@ -29,18 +30,25 @@ class MatchModel {
   final String? matchedItemImageUrl;
 
   /// The blended score shown as "XX% match" — see combined_match_score()
-  /// in supabase/05_multimodal_matching.sql for exactly how it's computed
-  /// from the three fields below.
+  /// in supabase/10_open_matching_and_time.sql for exactly how it's
+  /// computed from the four fields below.
   final double similarityScore;
 
   /// Score breakdown — each null independently (not just all-or-nothing)
   /// depending on what data both items in the pair happen to have (a text
-  /// embedding needs ai_service configured at post time; GPS needs both
-  /// posters to have shared a location). The UI shows whichever of these
-  /// are present rather than assuming all three always are.
+  /// embedding needs ai_service configured at post time; GPS/time need
+  /// both posters to have shared a location/event time). The UI shows
+  /// whichever of these are present rather than assuming all four always
+  /// are.
   final double? imageSimilarity;
   final double? textSimilarity;
   final double? distanceMeters;
+
+  /// 0..1, from time_proximity_score() — how close the two items'
+  /// event_time values are, not a literal duration. See
+  /// _ScoreBreakdown/MatchesScreen for where this becomes a human-readable
+  /// "close in time" label instead of a raw score.
+  final double? timeProximity;
   final String status; // 'pending' | 'confirmed' | 'dismissed'
   final DateTime createdAt;
 
@@ -60,6 +68,7 @@ class MatchModel {
       imageSimilarity: (map['image_similarity'] as num?)?.toDouble(),
       textSimilarity: (map['text_similarity'] as num?)?.toDouble(),
       distanceMeters: (map['distance_meters'] as num?)?.toDouble(),
+      timeProximity: (map['time_proximity'] as num?)?.toDouble(),
       status: map['match_status'] as String,
       createdAt: DateTime.parse(map['created_at'] as String),
     );
