@@ -59,6 +59,7 @@ genuinely optional — see their own rows below).
 | Delete account | Profile → "Delete account" — soft-deletes their items, scrubs their name/photo/phone, blocks future sign-in. See "Account deletion" below for exactly what this does and doesn't do | **Required:** run `supabase/09_account_deletion.sql` |
 | Chat flicker fixed | Both message screens (confirmed-match chat and direct messages) no longer flicker mid-conversation — rewritten to update incrementally instead of re-fetching the whole list on every change | None |
 | AI matching fixed | Found and fixed the actual bug: photo embeddings were being sent in a format Postgres's `vector` type couldn't reliably parse, so no item ever had a usable embedding and matches could never be created | None — already fixed in code. **But also see "Generating the on-device model (Phase 4)" above** — a still-empty `assets/models/` is an equally common reason matches never appear, and is separate from this bug |
+| Matching opened up | Category no longer gates matching — a lost item and a found item in different categories can still match on image/text/GPS/time. Added event-time proximity as a fourth scoring signal, and filter chips (Text match / Nearby / Similar time) on the Matches screen | **Required:** run `supabase/10_open_matching_and_time.sql` |
 
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
 `05` and `08` are required, `06`/`07` are optional but harmless to run
@@ -670,18 +671,37 @@ unchanged — only the visual presentation changed.
 ## Google sign-in setup (Phase 2)
 
 The "Continue with Google" button calls `signInWithOAuth`, but the
-redirect back into the app needs setup outside of Dart code:
+redirect back into the app needs setup outside of Dart code — in two
+different places, for two different hops, easy to mix up:
 
-1. **Supabase Dashboard** → Authentication → Providers → enable Google,
-   and add your OAuth client ID/secret from Google Cloud Console.
-2. **Supabase Dashboard** → Authentication → URL Configuration → add
-   `io.supabase.findora://login-callback` as a redirect URL (this exact
-   string is what `login_screen.dart` passes as `redirectTo`).
-3. **Android**: the intent filter for this scheme is already in
+1. **Google Cloud Console** → APIs & Services → Credentials → your OAuth
+   2.0 Client ID (Web application type) → **Authorized redirect URIs** →
+   add:
+   ```
+   https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback
+   ```
+   This is the one people get wrong — **not** the app's custom scheme.
+   The actual flow is app → Supabase → Google → back to Supabase → back
+   to the app, and this URI is what Google redirects to (Supabase's own
+   callback endpoint), not where the app ends up. Getting this wrong
+   looks like Google's own error page: "Access blocked: this app's
+   request is invalid" / "Error 400: redirect_uri_mismatch" — if you see
+   that, it's this URI, not anything in Supabase's dashboard or in code.
+2. **Supabase Dashboard** → Authentication → Providers → enable Google,
+   and paste in that same OAuth client's ID/secret.
+3. **Supabase Dashboard** → Authentication → URL Configuration → add
+   `io.supabase.findora://login-callback` as a redirect URL — this one
+   *is* the custom scheme, for the second hop (Supabase → app), which is
+   entirely separate from step 1's URI and doesn't get registered with
+   Google at all.
+4. **Android**: the intent filter for this scheme is already in
    `android/app/src/main/AndroidManifest.xml` — nothing to add there.
 
-Skip this and the email/password flow still works fine — the Google
-button will just fail gracefully with an error message.
+Skip all of this and the email/password flow still works fine — the
+Google button will just fail with an error page instead (which one
+depends on exactly what's missing — "provider is not enabled" means step
+2 hasn't been done yet at all; "redirect_uri_mismatch" means step 2 is
+done but step 1 wasn't, or was entered with a typo).
 
 ## Item detail screen: carousel, map preview, delete, and contact
 
@@ -908,12 +928,17 @@ again (not just hot reload — asset bundle changes need a full restart).
 
 1. On-device: the exported MobileNetV2 model runs on each photo,
    producing a predicted ImageNet label and a 1280-d embedding vector —
-   this is the CNN half of matching.
+   this is the CNN half of matching, and it runs **entirely on the
+   phone**, using the `.tflite` file bundled into the app itself. See
+   "Does matching need my laptop connected?" below for what that means
+   in practice.
 2. A heuristic in `core/ml/category_mapper.dart` maps that fine-grained
    label (e.g. "Labrador_retriever") onto one of Findora's categories
    (e.g. "Pets") to pre-fill the post form. The label also pre-fills the
    **title** field (title-cased — `PostItemScreen._titleCaseFromLabel`),
-   as long as the person hasn't already typed one themselves.
+   as long as the person hasn't already typed one themselves. This
+   category is just a starting suggestion for the post form now, not a
+   gate on matching — see point 5.
 3. Only the embedding, label, and photo get uploaded — matching needs
    everyone else's items too, so it can't happen purely on-device.
 4. Separately, if `AI_SERVICE_URL` is configured (see `ai_service/`),
@@ -923,17 +948,64 @@ again (not just hot reload — asset bundle changes need a full restart).
    TensorFlow/OpenCV/Sentence-Transformers/NLTK stack) — best-effort,
    skipped entirely if unset, slow, or unreachable.
 5. A trigger (`record_matches_for_image`) fires the moment a photo with
-   an embedding is inserted, comparing it against all opposite-type,
-   open, same-category items via pgvector's cosine distance operator
-   (`<=>`) to get an image-similarity candidate list, then — for each
-   candidate — blends in text similarity (if both sides have a text
-   embedding) and GPS proximity (if both sides have a location) into one
-   **combined score**, written to `matches` (see
-   `supabase/05_multimodal_matching.sql`'s `combined_match_score()`).
+   an embedding is inserted, comparing it against every opposite-type,
+   open item via pgvector's cosine distance operator (`<=>`) to get an
+   image-similarity candidate list — **category is not part of this
+   filter** (see "Why category doesn't gate matching" below) — then, for
+   each candidate, blends in text similarity (if both sides have a text
+   embedding), GPS proximity (if both sides have a location), and event
+   time proximity (if both sides set one) into one **combined score**,
+   written to `matches` (see
+   `supabase/10_open_matching_and_time.sql`'s `combined_match_score()`).
 6. `MatchesScreen` reads those via `my_matches()`, which resolves each
    row into "my item" vs "the matched item" from the caller's
-   perspective — either owner can confirm or dismiss it, and now also
-   sees the score breakdown ("📷 92% · 📝 78% · 📍 1.2 km").
+   perspective — either owner can confirm or dismiss it, sees the score
+   breakdown ("📷 92% · 📝 78% · 📍 1.2 km · 🕐 6h apart"), and can filter
+   the list down to matches that have a strong text/location/time signal
+   via the chips at the top of the screen (client-side filtering over
+   the already-fetched list — the dataset is just one person's matches,
+   not worth a server round-trip per filter tap).
+
+### Why category doesn't gate matching
+
+Originally, `match_items()` only compared items within the same
+category, on the theory that a lost wallet shouldn't be compared against
+a found bicycle. In practice this caused real matches to be missed: the
+on-device model's category guess is just a heuristic (an ImageNet label
+mapped through `category_mapper.dart`'s rules), and two photos of the
+literal same object can easily land in different guessed categories,
+especially if one person's photo confuses the classifier and the other
+person's doesn't — at which point those two items are silently never
+compared *at all*, regardless of how visually identical the photos
+actually are. Category is still collected and shown (useful for
+browsing/filtering the main feed), it just no longer excludes a
+candidate from being scored in `match_items()`.
+
+### Does matching need my laptop connected?
+
+No — once the app is running on your phone, the whole matching pipeline
+is independent of the laptop:
+
+- **On-device classification/embedding** (`tflite_classifier.dart`) runs
+  using the `.tflite` file bundled into the installed app — this is
+  local computation on the phone's own CPU, identical whether the phone
+  is tethered to a laptop or sitting on the other side of the room.
+- **Everything else** (storing the embedding, the `matches` trigger,
+  fetching results) talks to **Supabase**, a cloud service — this needs
+  *internet on the phone* (Wi-Fi or mobile data), which has nothing to
+  do with the laptop being nearby.
+- `flutter run`'s USB/wireless connection is a **development
+  convenience only** — hot reload and streaming console logs back to
+  your terminal. It's not something the running app depends on to
+  function. Unplugging the cable is fine for using the app; the caveat
+  is that on some devices, physically disconnecting *while* a debug
+  session is actively attached can kill that debug session (and
+  sometimes the app process along with it, depending on the device's USB
+  debugging behavior) — annoying for testing, but a debug-tooling
+  quirk, not evidence the app secretly needs the laptop. If you want to
+  be completely sure there's no dependency at all, `flutter build apk
+  --release` and install that APK normally — a release build has zero
+  runtime connection to the development machine, ever.
 
 ## The matching engine, end to end (Phase 5, extended)
 
@@ -941,31 +1013,35 @@ again (not just hot reload — asset bundle changes need a full restart).
   `item_images` for rows with a non-null `embedding`. Runs
   `match_items()` for the image-similarity **candidate list** (this is
   the fast ANN "recall" step — see the multimodal note below), computes
-  text similarity + GPS proximity for each candidate, and inserts the
-  blended result into `matches`, `on conflict do nothing` so
-  re-processing never duplicates. Runs inside the same transaction as
-  the photo insert.
+  text similarity + GPS proximity + time proximity for each candidate,
+  and inserts the blended result into `matches`, `on conflict do
+  nothing` so re-processing never duplicates. Runs inside the same
+  transaction as the photo insert.
 - **`match_items()` excludes same-user matches** — posting both a "lost"
-  and "found" report yourself won't match against yourself.
-- **Multimodal scoring** (`supabase/05_multimodal_matching.sql`):
+  and "found" report yourself won't match against yourself. It still
+  *accepts* an optional category filter parameter (unused by the
+  trigger, which now passes `null` — see "Why category doesn't gate
+  matching" above), kept in case a future caller wants it.
+- **Multimodal scoring** (`supabase/10_open_matching_and_time.sql`):
   `match_items()` stays a pure image-similarity ANN search on purpose —
   it's the one step that can actually use `item_images.embedding`'s
   HNSW index, so it's what keeps matching fast as the table grows.
   Everything past that (text similarity via `items.text_embedding`, GPS
-  proximity via `gps_proximity_score()`) only ever runs over the
-  already-small candidate list `match_items()` returns, then
-  `combined_match_score()` blends the three with weights 0.5 image / 0.3
-  text / 0.2 GPS, re-normalized over whichever signals are actually
-  present for that pair (not every item has a location or a text
-  embedding). `rescore_matches_for_item()` exists because the text
+  proximity via `gps_proximity_score()`, time proximity via
+  `time_proximity_score()`) only ever runs over the already-small
+  candidate list `match_items()` returns, then `combined_match_score()`
+  blends all four with weights 0.4 image / 0.25 text / 0.2 GPS / 0.15
+  time, re-normalized over whichever signals are actually present for
+  that pair (not every item has a location, a text embedding, or an
+  event time set). `rescore_matches_for_item()` exists because the text
   embedding often arrives *after* the item row is first inserted (an
   async HTTP call to `ai_service/`, not guaranteed to finish before the
   first photo upload) — call it once that embedding lands to backfill
   `text_similarity`/`similarity_score` on that item's existing matches.
 - **`my_matches()`**: resolves `item_a_id`/`item_b_id` into "my item" vs
   "the matched item" from `auth.uid()`'s perspective in one query, now
-  including the `image_similarity`/`text_similarity`/`distance_meters`
-  breakdown alongside the blended `similarity_score`.
+  including the `image_similarity`/`text_similarity`/`distance_meters`/
+  `time_proximity` breakdown alongside the blended `similarity_score`.
 - Item owners can `update` their own matches (confirm/dismiss), not just
   read them.
 
