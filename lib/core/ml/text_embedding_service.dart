@@ -20,6 +20,24 @@ class TextEmbeddingService {
   /// Null when `AI_SERVICE_URL` isn't set in .env — see [tryEmbed].
   final String? _baseUrl;
 
+  /// Fire-and-forget ping to the service's `/health` endpoint, meant to be
+  /// called as soon as the post form opens. Free-tier hosts (Render,
+  /// Railway, ...) put an idle service to sleep, and waking it up plus
+  /// loading the sentence-transformer model can take 30-60 seconds — far
+  /// longer than [tryEmbed]'s 6-second budget. Without this, the *first*
+  /// post after a quiet spell reliably times out and goes up with no text
+  /// embedding (so no text-similarity signal on its matches). Pinging
+  /// early gives the service the time it takes to fill out the form to
+  /// wake up. Never throws, never blocks, safe to call repeatedly.
+  void warmUp() {
+    final baseUrl = _baseUrl;
+    if (baseUrl == null || baseUrl.isEmpty) return;
+    http
+        .get(Uri.parse('$baseUrl/health'))
+        .timeout(const Duration(seconds: 90))
+        .then<void>((_) {}, onError: (Object _) {});
+  }
+
   /// Best-effort: returns null on any failure (missing config, timeout,
   /// non-200, malformed response) instead of throwing, so callers never
   /// need a try/catch of their own around this — see the class doc for why
