@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../providers/auth_providers.dart';
 import '../supabase/supabase_client.dart';
 import '../widgets/main_shell.dart';
+import '../widgets/tab_back_guard.dart';
 import '../../features/splash/splash_screen.dart';
 import '../../features/onboarding/onboarding_screen.dart';
 import '../../features/auth/login_screen.dart';
@@ -145,14 +146,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         branches: [
           StatefulShellBranch(
             routes: [
-              GoRoute(path: '/feed', builder: (context, state) => const ItemFeedScreen()),
+              GoRoute(
+                path: '/feed',
+                builder: (context, state) =>
+                    const TabBackGuard(isHomeTab: true, child: ItemFeedScreen()),
+              ),
             ],
           ),
           StatefulShellBranch(
             routes: [
               GoRoute(
                 path: '/matches',
-                builder: (context, state) => const MatchesScreen(),
+                builder: (context, state) =>
+                    const TabBackGuard(isHomeTab: false, child: MatchesScreen()),
               ),
             ],
           ),
@@ -160,7 +166,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: '/chats',
-                builder: (context, state) => const ChatListScreen(),
+                builder: (context, state) =>
+                    const TabBackGuard(isHomeTab: false, child: ChatListScreen()),
               ),
             ],
           ),
@@ -168,7 +175,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: '/profile',
-                builder: (context, state) => const ProfileScreen(),
+                builder: (context, state) =>
+                    const TabBackGuard(isHomeTab: false, child: ProfileScreen()),
               ),
             ],
           ),
