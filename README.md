@@ -1,7 +1,8 @@
 # Findora — Setup Guide & Reference
 
-Findora is a lost & found app: report a lost or found item, and on-device
-AI compares its photo against everyone else's to suggest a match.
+Findora is a lost & found app: report a lost or found item, and the AI
+compares it against everyone else's — by title and description always,
+and by photo too if one's attached — to suggest a match.
 
 This README has two parts. **Part A** is a complete, from-zero, step by
 step walkthrough to get the app running on your own Android phone from
@@ -66,6 +67,17 @@ genuinely optional — see their own rows below).
 | Exit confirmation fixed | The "Leave Findora?" popup now really appears — the back-button guard moved from `MainShell` into each tab's own route (see "Exit confirmation" below) | None |
 | AI matching, second fix | The bundled model's two outputs come out in the opposite order to what the app assumed, so every photo was posted with no embedding and nothing could ever match. The app now detects the order itself. Also: a **scan icon on the Matches tab** (and an automatic scan on opening it) that embeds photos posted before the fix, a visible warning when a photo can't be analyzed, a lower and tunable similarity cut-off, and a trigger so a photo embedded later still gets matched | **Required:** run `supabase/11_realtime_and_matching_fixes.sql`, then follow **A4b** below |
 
+| Photos optional | A post now needs only a **title**. With no photo, the app shows the Findora logo on a neutral tile everywhere a photo would appear (feed, My reported items, matches, chats, post detail). The placeholder is drawn by the app — nothing is uploaded or stored for it. **Note:** it's still matched by title and description either way (see the next row) — a photo only adds a second, independent matching signal on top | None |
+| Edit photos | Edit post now handles photos: add more, remove, or tap one to replace it. Changes are held until you press Save. A newly added photo is analysed on-device like at posting, so it can create matches straight away. Removing deletes the photo row and, best-effort, the file in Storage | None (the existing delete policies already cover it) |
+| Match by title/description | Posts are now compared by their title and description too, not only their photo — so a post with no photo, or one whose photo failed AI analysis, can still be matched. Runs the moment a post is made or its title/description is edited. Uses a proper meaning-based comparison when the optional `ai_service/` text service is configured and awake, otherwise falls back to comparing the words themselves (no setup needed) | **Required for posts made before this:** run `supabase/12_text_matching.sql`, then `select public.rematch_all_text();` |
+| Clearer matches | Each match card shows **your item on the left and the item it matched on the right** (photo, lost/found, title), and tapping either opens that post | None |
+
+| Delete crash fixed | Swiping a post away in "My reported items" could crash with "A dismissed Dismissible widget is still part of the tree" if the server hadn't confirmed the delete by the next frame. The card is now hidden the instant the delete succeeds, instead of waiting on that round trip | None |
+
+| Matches from a post | A post's detail page now has a "View possible matches" row: the owner sees every match found for it (or a note that the AI checks automatically if there are none yet); anyone else sees it only once the post is already matched against one of their own — tapping it opens the same Confirm / Not a match / Message actions as the Matches tab | None |
+
+| Claim status crash + staleness | Filing/approving a claim could crash with a framework tree-consistency error ("_owner != null" / "_children.contains(child)"), because match cards in a list had no stable identity for Flutter to track when a match moved from pending to decided. Separately, the claim/return status banner in a chat only ever loaded once, so the other person's already-open chat never showed a claim was filed, approved, etc. until they left and reopened it | None |
+
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
 `05` and `08` are required, `06`/`07` are optional but harmless to run
 anyway:
@@ -73,9 +85,10 @@ anyway:
 `07_email_confirmation.sql` (the last one has manual placeholders to fill
 in — see its header comment and "Email confirmation flow" below),
 `08_soft_delete.sql`, `09_account_deletion.sql`,
-`10_open_matching_and_time.sql`, and finally
+`10_open_matching_and_time.sql`,
 `11_realtime_and_matching_fixes.sql` (live chat + AI matching fixes —
-required).
+required), and finally `12_text_matching.sql` (matching by title/
+description, independent of photos — required).
 
 ---
 
@@ -224,9 +237,10 @@ warnings about Chrome or Xcode if you don't plan to build for web/iOS.
    specifically has two placeholders to edit before running it — see
    "Email confirmation flow" further down.
 7c. Then `08_soft_delete.sql`, `09_account_deletion.sql`,
-   `10_open_matching_and_time.sql` and `11_realtime_and_matching_fixes.sql`,
-   in that order. Each is safe to re-run. `08`, `10` and `11` are needed
-   for the current app code to work properly (see the top of this file).
+   `10_open_matching_and_time.sql`, `11_realtime_and_matching_fixes.sql`
+   and `12_text_matching.sql`, in that order. Each is safe to re-run.
+   `08`, `10`, `11` and `12` are needed for the current app code to work
+   properly (see the top of this file).
 8. In the left sidebar, click the gear icon (**Project Settings**) →
    **API Keys**. Copy two values, you'll need them in the next step:
    - **Project URL** (looks like `https://xxxxx.supabase.co`)
@@ -264,13 +278,13 @@ warnings about Chrome or Xcode if you don't plan to build for web/iOS.
 Everything AI-related, in order. Nothing here needs Python or TensorFlow
 on your machine: the project already ships the model files.
 
-**Step 1 — Make sure all 11 migrations have been run.**
+**Step 1 — Make sure all 12 migrations have been run.**
 In the Supabase SQL Editor, run the migrations from A3 in numeric order
-(`01` … `11`). Skipping ahead is the usual cause of confusing errors, so if
+(`01` … `12`). Skipping ahead is the usual cause of confusing errors, so if
 you're not sure which ones you ran, just run any you're unsure of again —
 they are all safe to re-run.
 
-**Step 2 — Confirm migration 11 took effect.**
+**Step 2 — Confirm migrations 11 and 12 took effect.**
 Run each of these on its own:
 ```sql
 -- both chat tables should be listed (this is what makes chat live):
@@ -280,10 +294,18 @@ where pubname = 'supabase_realtime' and schemaname = 'public';
 -- should return 0.6:
 select public.matching_threshold();
 
+-- should return 0.3:
+select public.text_matching_threshold();
+
 -- should list BOTH item_images_record_matches and
 -- item_images_record_matches_on_embedding:
 select tgname from pg_trigger
 where tgrelid = 'public.item_images'::regclass and not tgisinternal;
+
+-- should list BOTH items_record_text_matches_insert and
+-- items_record_text_matches_update:
+select tgname from pg_trigger
+where tgrelid = 'public.items'::regclass and not tgisinternal;
 ```
 Or run query 4 in `supabase/diagnostics_matching.sql` — every column in its
 result should say `true`.
@@ -329,32 +351,61 @@ output is `1280` wide and the "ready" line appears. If instead you see an
 error mentioning "no 1280-wide output", the model file isn't the one this
 project expects — regenerate it (Part B, "Generating the on-device model").
 
-**Step 7 — Fix photos posted earlier.**
-Photos posted before this fix have no AI data, so they can't be matched.
-Open the **Matches** tab: it scans them automatically and shows a message
-when it finishes. You can also tap the scan icon (top right) at any time.
-Each photo that gets scanned is compared against everyone else's straight
-away, so new matches can appear a moment later — pull down to refresh if
-needed.
+**Step 7 — Fix posts made earlier (every account needs this once).**
 
-**Step 8 — Test it properly, with two accounts.**
+Title/description matching runs automatically for anything posted **after**
+migration 12 — nothing to do for those. For posts made *before* it, run
+this once in the SQL Editor (safe to re-run):
+```sql
+select public.rematch_all_text();
+```
+
+Photos are separate — see the next step.
+
+**Step 8 — Fix photos posted earlier (every account needs this once).**
+Photos posted before this fix have no AI data, so they can't be matched.
+The app now analyses them automatically **as soon as it launches** (the
+console prints `Embedding backfill: …`), and the Matches tab's scan icon
+does the same on demand.
+
+The catch: a photo can only be analysed on its **owner's** phone. A match
+needs *both* photos of the pair analysed, so if account A hasn't opened the
+updated app yet, nobody sees matches against A's items — even though their
+own photos are fine. When testing with several accounts, sign in to **each**
+one once on the updated build and wait a few seconds (the Matches tab's
+scan icon shows a progress bar while it works). Matches then appear for
+everyone involved without any further action.
+
+**Step 9 — Test it properly, with two accounts.**
 Matching deliberately never pairs two items from the *same* account, and
 only pairs a **lost** item with a **found** one. So:
 1. Account A: report a **Lost** item with a clear photo.
 2. Account B (another phone/emulator, or sign out and sign in as someone
    else): report a **Found** item with a photo of the same — or a very
    similar — object.
-3. Open **Matches** as either account.
+3. Open **Matches** as either account. Even with no photo on either side,
+   similar enough titles/descriptions should already show a match.
 
 If nothing appears, run `supabase/diagnostics_matching.sql` in the SQL
-Editor, one query at a time:
+Editor, one query at a time. **Start with 2b** — it lists every item with
+its owner, type and `has_embedding`. A Lost and a Found item from different
+owners that are both `true` should have matched by photo; regardless of
+that column, they should also have matched by text unless their wording is
+genuinely dissimilar. A `false` `has_embedding` just means that owner still
+needs to open the updated app for photo matching specifically (Step 8).
+Then:
+- **3d** — the real text similarity of each cross-account pair. If your
+  test pair scores below `0.3`, the words themselves don't overlap enough
+  — try more similar wording, or lower the number in
+  `text_matching_threshold()` (edit that function in migration 12, re-run
+  it, then run `select public.rematch_all_text();`).
 - **3c** — does each account have photos *with* an embedding? Any
-  `without_embedding` above 0 means open that account's Matches tab (Step 7).
-- **3b** — the real similarity of each cross-account pair. If your test pair
-  scores below `0.60`, the model doesn't consider the photos alike. Either
-  use a clearer photo or lower the number in `matching_threshold()` (edit
-  that function in migration 11, re-run it, then run
-  `select public.rematch_all_images();`).
+  `without_embedding` above 0 means open that account's Matches tab (Step 8).
+- **3b** — the real image similarity of each cross-account pair. If your
+  test pair scores below `0.60`, the model doesn't consider the photos
+  alike. Either use a clearer photo or lower the number in
+  `matching_threshold()` (edit that function in migration 11, re-run it,
+  then run `select public.rematch_all_images();`).
 - **5** — the `matches` table itself.
 
 **What to do if a post says "the AI could not analyze N photos".**
@@ -1081,7 +1132,22 @@ again (not just hot reload — asset bundle changes need a full restart).
    time proximity (if both sides set one) into one **combined score**,
    written to `matches` (see
    `supabase/10_open_matching_and_time.sql`'s `combined_match_score()`).
-6. `MatchesScreen` reads those via `my_matches()`, which resolves each
+6. Separately from all of that — and needing no photo at all —
+   **title/description matching** runs the moment an item is posted, and
+   again whenever its title or description is edited (triggers
+   `items_record_text_matches_insert`/`_update`, `match_item_by_text()`,
+   `supabase/12_text_matching.sql`). It compares text the same way point 4
+   would, if that text embedding is available for both items; if not (no
+   `ai_service/` configured, or it didn't respond before posting), it
+   falls back to `pg_trgm`'s word/substring similarity on the raw title +
+   description — always available, no setup, but literal (it helps when
+   the words genuinely overlap; "wallet" vs "purse" won't score well
+   without the semantic embedding). Either way the result lands in the
+   same `matches` row a photo comparison would use — see
+   `upsert_match_score()`, which lets whichever signal (photo or text)
+   finds a pair first, and whichever finds it second enrich the same row
+   rather than duplicate it or get silently dropped.
+7. `MatchesScreen` reads those via `my_matches()`, which resolves each
    row into "my item" vs "the matched item" from the caller's
    perspective — either owner can confirm or dismiss it, sees the score
    breakdown ("📷 92% · 📝 78% · 📍 1.2 km · 🕐 6h apart"), and can filter
@@ -1168,6 +1234,35 @@ is independent of the laptop:
   `time_proximity` breakdown alongside the blended `similarity_score`.
 - Item owners can `update` their own matches (confirm/dismiss), not just
   read them.
+- **Title/description matching** (`supabase/12_text_matching.sql`) is a
+  second, independent way a pair gets into `matches`, needing no photo:
+  - `items_record_text_matches_insert`/`_update` — `after insert`, and
+    `after update of title, description` (guarded by a `when` clause so it
+    only actually re-runs when one of those values changed, since the
+    app's edit form always sends both columns) — call
+    `match_item_by_text()`.
+  - `match_items_by_text()` is the text-matching analogue of
+    `match_items()`: same opposite-type/different-owner/open/not-deleted
+    filters, ordered by `text_similarity_between()` instead of vector
+    distance, cut off by `text_matching_threshold()` (0.30) instead of
+    `matching_threshold()`.
+  - `text_similarity_between(a_id, b_id)` picks semantic similarity via
+    `items.text_embedding` when both sides have one, else `pg_trgm`'s
+    `similarity()` on the lowercased title (weighted 0.7) and description
+    (0.3, skipped when either side has none) — see the function's own
+    comment for why title outweighs description.
+  - `upsert_match_score(item_a, item_b, image_similarity, text_similarity)`
+    is what both `match_image()` and `match_item_by_text()` actually write
+    through: it looks for an existing row for the pair **in either
+    column order** (the unique constraint is on the ordered pair, but two
+    items only ever describe one relationship) and updates it — keeping
+    whichever of image/text similarity it already had for any signal the
+    current call doesn't supply — instead of inserting a second row or
+    silently discarding the new signal. GPS/time proximity are recomputed
+    fresh from the two items' current data on every call, cheap enough not
+    to bother caching.
+  - `rematch_all_text()` — the text-matching equivalent of
+    `rematch_all_images()`, for items posted before this migration.
 
 ## Google Maps setup (Phase 6)
 
