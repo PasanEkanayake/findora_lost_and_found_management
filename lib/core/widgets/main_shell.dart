@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import 'confirm_dialog.dart';
+import 'tab_back_guard.dart';
+import '../../features/chat/data/messages_providers.dart';
+import '../../features/contact/data/contact_providers.dart';
 import '../../features/home/item_feed_screen.dart';
+import '../../features/matches/data/embedding_backfill_provider.dart';
+import '../../features/matches/data/matches_providers.dart';
 
 /// Bottom navigation shell for the four persistent tabs (Browse, Matches,
 /// Chats, Profile). The floating action button is deliberately outside the
@@ -20,14 +23,12 @@ import '../../features/home/item_feed_screen.dart';
 /// has no good place to float it, and "report an item" isn't a
 /// map-relevant action to begin with.
 ///
-/// Browse (branch 0) is the app's effective "home" — go_router's
-/// StatefulShellRoute keeps a separate navigation stack per tab, so a back
-/// press while on Browse's root has nowhere else in the app to go. Rather
-/// than let that fall through to backing out of the app instantly, a
-/// PopScope here intercepts exactly that case and asks for confirmation
-/// first; every other tab keeps Android's normal back behavior (which
-/// go_router/Navigator resolve on their own — switching to a previous tab
-/// or popping a pushed screen).
+/// Browse (branch 0) is the app's effective "home". The Android back
+/// button on a tab's root screen is handled by [TabBackGuard], which each
+/// tab's route is wrapped in (see app_router.dart) — that's where the
+/// "Leave Findora?" confirmation actually comes from. See TabBackGuard's
+/// doc for why it can't just live here: go_router sends back presses to
+/// the active tab's own nested navigator, not to this widget's route.
 class MainShell extends ConsumerWidget {
   const MainShell({super.key, required this.navigationShell});
 
@@ -35,20 +36,13 @@ class MainShell extends ConsumerWidget {
 
   static const _branchesWithReportFab = {0, 1};
 
-  Future<void> _confirmExit(BuildContext context) async {
-    final confirmed = await showConfirmDialog(
-      context,
-      icon: Icons.waving_hand_outlined,
-      title: 'Leave Findora?',
-      message: "You'll stop seeing new match alerts while the app is closed.",
-      confirmLabel: 'Exit app',
-      cancelLabel: 'Stay',
-    );
-    if (confirmed) SystemNavigator.pop();
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Starts the one-off catch-up that gives this user's older photos an AI
+    // embedding, whichever tab they land on (see the provider's doc for why
+    // it can't wait for the Matches tab). The value itself isn't used.
+    ref.watch(embeddingBackfillProvider);
+
     // Map view (Browse tab) shows its own full-screen layout with no room
     // for a floating action button sitting over it, and "report an item"
     // isn't really a map-context action anyway — so the FAB hides
@@ -58,13 +52,16 @@ class MainShell extends ConsumerWidget {
     final isOnHomeTab = navigationShell.currentIndex == 0;
 
     return PopScope(
-      // Only the Browse tab's root has no further "back" to fall through
-      // to (see class doc) — everywhere else, let the platform/router
-      // handle it exactly as it already does.
-      canPop: !isOnHomeTab,
+      // Fallback only: normally each tab's own TabBackGuard (inside the
+      // tab's nested navigator) receives the back press first. This one
+      // covers the case where the press is delivered to this shell's own
+      // route instead, and runs the identical logic so both paths behave
+      // the same. Pushed screens (item detail, chat, ...) sit above this
+      // route, so they pop normally and never reach either guard.
+      canPop: false,
       onPopInvokedWithResult: (didPop, result) {
-        if (didPop || !isOnHomeTab) return;
-        _confirmExit(context);
+        if (didPop) return;
+        handleTabBack(context, ref, isHomeTab: isOnHomeTab);
       },
       child: Scaffold(
         body: navigationShell,
@@ -89,6 +86,17 @@ class MainShell extends ConsumerWidget {
             // nothing re-inits it on a tab switch.
             if (index == 0) {
               ref.read(feedShowsMapProvider.notifier).setShowsMap(false);
+            }
+            // These tabs stay mounted offscreen (see above), so their
+            // data is otherwise only fetched once — a match created by
+            // *someone else's* post, or a new confirmed chat, wouldn't
+            // appear until a manual pull-to-refresh. Refetch whenever the
+            // tab is opened instead.
+            if (index == 1) {
+              ref.invalidate(matchesProvider);
+            } else if (index == 2) {
+              ref.invalidate(conversationsProvider);
+              ref.invalidate(contactThreadsProvider);
             }
             navigationShell.goBranch(
               index,
