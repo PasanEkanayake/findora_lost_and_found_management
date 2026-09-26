@@ -14,6 +14,7 @@ import '../../features/auth/login_screen.dart';
 import '../../features/auth/signup_screen.dart';
 import '../../features/auth/signup_welcome_screen.dart';
 import '../../features/home/item_feed_screen.dart';
+import '../../features/matches/item_matches_screen.dart';
 import '../../features/matches/matches_screen.dart';
 import '../../features/chat/chat_list_screen.dart';
 import '../../features/chat/chat_screen.dart';
@@ -111,6 +112,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/edit-item',
         builder: (context, state) => EditItemScreen(item: state.extra as ItemModel),
+      ),
+      GoRoute(
+        path: '/item/:id/matches',
+        builder: (context, state) => ItemMatchesScreen(
+          itemId: state.pathParameters['id']!,
+          itemTitle: state.extra as String?,
+        ),
       ),
       GoRoute(
         path: '/admin/reports',
