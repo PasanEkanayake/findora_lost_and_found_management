@@ -33,6 +33,32 @@ join items i on i.id = img.item_id
 order by img.created_at desc
 limit 5;
 
+-- 2b) START HERE. Every item with its owner, type and whether its photo
+-- has an AI embedding — one row per item, newest first. This only affects
+-- PHOTO matching — text matching (title/description) doesn't need a photo
+-- at all and isn't shown here; see query 3d for that. Compare with the
+-- app: a Lost item and a Found item from DIFFERENT owners, both showing
+-- has_embedding = true, are the pairs that should have photo-matched. Any
+-- has_embedding = false row is invisible to *photo* matching until its
+-- owner opens the updated app (it embeds their photos automatically at
+-- launch) or taps the scan icon on their Matches tab.
+select
+  i.title,
+  i.type,
+  coalesce(p.full_name, p.username, i.user_id::text) as owner,
+  i.status,
+  (i.deleted_at is not null) as deleted,
+  count(img.id) as photos,
+  count(img.embedding) as photos_with_embedding,
+  (count(img.id) > 0 and count(img.id) = count(img.embedding)) as has_embedding,
+  i.created_at
+from public.items i
+left join public.profiles p on p.id = i.user_id
+left join public.item_images img on img.item_id = i.id
+group by i.id, p.full_name, p.username
+order by i.created_at desc
+limit 40;
+
 -- 3) (Optional, and the only query here that needs editing.) The exact
 -- similarity between two specific photos. It is commented out so that
 -- running the whole file can't fail on the placeholders — to use it,
@@ -90,6 +116,26 @@ where i.deleted_at is null
 group by 1
 order by without_embedding desc;
 
+-- 3d) Every cross-account, opposite-type pair of ITEMS (no photo needed),
+-- best first, with NO threshold applied — the text-matching equivalent of
+-- 3b. This is the query to tune text_matching_threshold() from. A pair
+-- above text_matching_threshold() should already be in `matches` (query 5)
+-- — if it's above the line and missing there, run:
+--   select public.rematch_all_text();
+select
+  a.title as title_a, a.type as type_a,
+  b.title as title_b, b.type as type_b,
+  round(public.text_similarity_between(a.id, b.id)::numeric, 3) as similarity,
+  public.text_similarity_between(a.id, b.id) >= public.text_matching_threshold()
+    as above_threshold
+from items a
+join items b on b.id > a.id
+where a.type <> b.type
+  and a.user_id <> b.user_id
+  and a.deleted_at is null and b.deleted_at is null
+order by similarity desc
+limit 30;
+
 -- 4) Are the migrations that matter for matching / chat actually applied?
 select
   exists (select 1 from information_schema.columns
@@ -111,7 +157,13 @@ select
             and tablename = 'contact_messages') as realtime_contact_messages,
   exists (select 1 from pg_publication_tables
           where pubname = 'supabase_realtime' and schemaname = 'public'
-            and tablename = 'messages') as realtime_messages;
+            and tablename = 'messages') as realtime_messages,
+  -- migration 12:
+  exists (select 1 from pg_proc where proname = 'match_item_by_text') as has_12_text_match_fn,
+  exists (select 1 from pg_trigger
+          where tgname = 'items_record_text_matches_insert') as has_12_insert_trigger,
+  exists (select 1 from pg_trigger
+          where tgname = 'items_record_text_matches_update') as has_12_update_trigger;
 
 -- 5) Has the trigger ever actually inserted anything into `matches`, for
 -- ANY pair of items, ever? If this is empty even after fixing embeddings
