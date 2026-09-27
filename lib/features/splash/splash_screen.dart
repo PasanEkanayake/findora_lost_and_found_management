@@ -107,7 +107,8 @@ class _SplashScreenState extends State<SplashScreen>
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'The Smart Lost & Found',
+                      'The Smart Lost & Found Detective',
+                      textAlign: TextAlign.center,
                       style: GoogleFonts.inter(
                         fontSize: 15,
                         color: onPrimary.withValues(alpha: 0.85),
