@@ -1,23 +1,21 @@
-import 'dart:math' as math;
-
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 
-import '../chat/chat_screen.dart';
-import '../chat/data/messages_providers.dart';
+import '../items/data/items_providers.dart';
+import '../../core/ml/tflite_classifier.dart';
+import '../../core/ml/tflite_provider.dart';
 import '../../core/widgets/shimmer_list.dart';
 import 'data/match_model.dart';
 import 'data/matches_providers.dart';
+import 'widgets/match_card.dart';
 
 /// Which of the non-mandatory signals a match must have a meaningful
 /// value for, to narrow the list down. Image similarity isn't one of the
-/// options here on purpose: every match already passed the 0.75 image
-/// threshold just to exist as a candidate at all (see match_items() in
-/// supabase/10_open_matching_and_time.sql), so filtering by "has an image
-/// match" would never actually exclude anything.
+/// options here on purpose: every match already passed the image
+/// threshold (see matching_threshold() in
+/// supabase/11_realtime_and_matching_fixes.sql) just to exist as a
+/// candidate at all, so filtering by "has an image match" would never
+/// actually exclude anything.
 enum _MatchFilter { all, text, nearby, time }
 
 /// Surfaces candidate matches from `my_matches()` — populated automatically
@@ -52,12 +50,130 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
     }
   }
 
+  bool _isScanning = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Quietly catches up any of this user's photos that never got an AI
+    // embedding (posted before the model worked, or while it failed) —
+    // those photos are invisible to matching until they have one. Runs
+    // once per visit to this tab and says nothing if there's nothing to do.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scan(manual: false);
+    });
+  }
+
+  void _showSnack(String message, {bool isError = false}) {
+    if (!mounted) return;
+    final theme = Theme.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? theme.colorScheme.error : null,
+        duration: Duration(seconds: isError ? 8 : 4),
+      ),
+    );
+  }
+
+  Future<TfliteClassifier?> _loadClassifierOrExplain() async {
+    try {
+      return await ref.read(tfliteClassifierProvider.future);
+    } catch (e) {
+      _showSnack(
+        "The on-device AI model couldn't load: $e\n"
+        'Check that assets/models/ has both files, then fully restart the app '
+        '(stop + flutter run — hot reload does not reload assets).',
+        isError: true,
+      );
+      return null;
+    }
+  }
+
+  /// Embeds this user's own photos that are missing an embedding. Each one
+  /// that succeeds makes the database run the match search for it (see
+  /// ItemsRepository.embedExistingImage), so new matches can appear
+  /// straight after — hence the refetch at the end.
+  ///
+  /// [manual] is true when the person tapped the scan button: only then is
+  /// a "nothing to do" outcome worth announcing. Failures are always
+  /// announced — the whole reason this exists is that AI matching used to
+  /// fail without anyone being told.
+  Future<void> _scan({required bool manual}) async {
+    if (_isScanning) return;
+    setState(() => _isScanning = true);
+    try {
+      final repo = ref.read(itemsRepositoryProvider);
+      final pending = await repo.fetchMyImagesMissingEmbeddings();
+      if (pending.isEmpty) {
+        if (manual) {
+          _showSnack(
+            'Your photos are all analysed. A match also needs the other '
+            "person's photo to be analysed — that happens when they open "
+            'the updated app.',
+          );
+        }
+        return;
+      }
+
+      final classifier = await _loadClassifierOrExplain();
+      if (classifier == null) return;
+
+      var done = 0;
+      var failed = 0;
+      String? firstError;
+      for (final image in pending) {
+        try {
+          await repo.embedExistingImage(
+            imageId: image.id,
+            imageUrl: image.url,
+            classifier: classifier,
+          );
+          done++;
+        } catch (e) {
+          failed++;
+          firstError ??= '$e';
+        }
+      }
+
+      if (!mounted) return;
+      ref.invalidate(matchesProvider);
+      if (failed == 0) {
+        _showSnack('Scanned $done photo${done == 1 ? '' : 's'} — checking for matches.');
+      } else {
+        _showSnack(
+          'Scanned $done, failed $failed. First error: $firstError',
+          isError: true,
+        );
+      }
+    } catch (e) {
+      _showSnack("Couldn't scan your photos: $e", isError: true);
+    } finally {
+      if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final matchesAsync = ref.watch(matchesProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Matches for you')),
+      appBar: AppBar(
+        title: const Text('Matches for you'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.image_search),
+            tooltip: 'Scan my photos for matches',
+            onPressed: _isScanning ? null : () => _scan(manual: true),
+          ),
+        ],
+        bottom: _isScanning
+            ? const PreferredSize(
+                preferredSize: Size.fromHeight(4),
+                child: LinearProgressIndicator(),
+              )
+            : null,
+      ),
       body: RefreshIndicator(
         onRefresh: () => ref.refresh(matchesProvider.future),
         child: matchesAsync.when(
@@ -74,7 +190,9 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
                 title: 'No matches yet',
                 body: 'Once you report a lost or found item, our on-device AI '
                     "compares its photo against everyone else's to look for a "
-                    "possible match — they'll show up here automatically.",
+                    "possible match — they'll show up here automatically. "
+                    'Posted before? Tap the scan icon (top right) to re-check '
+                    'your photos.',
               );
             }
 
@@ -133,7 +251,7 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
                                   style: Theme.of(context).textTheme.titleSmall),
                               const SizedBox(height: 8),
                               for (final match in pending) ...[
-                                _MatchCard(match: match),
+                                MatchCard(key: ValueKey(match.matchId), match: match),
                                 const SizedBox(height: 12),
                               ],
                             ],
@@ -143,7 +261,7 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
                                   style: Theme.of(context).textTheme.titleSmall),
                               const SizedBox(height: 8),
                               for (final match in decided) ...[
-                                _MatchCard(match: match),
+                                MatchCard(key: ValueKey(match.matchId), match: match),
                                 const SizedBox(height: 12),
                               ],
                             ],
@@ -172,217 +290,6 @@ class _FilterChip extends StatelessWidget {
       label: Text(label),
       selected: selected,
       onSelected: (_) => onTap(),
-    );
-  }
-}
-
-class _MatchCard extends ConsumerWidget {
-  const _MatchCard({required this.match});
-
-  final MatchModel match;
-
-  Future<void> _act(WidgetRef ref, BuildContext context, String status) async {
-    try {
-      await ref.read(matchesRepositoryProvider).updateStatus(match.matchId, status);
-      ref.invalidate(matchesProvider);
-      if (status == 'confirmed') {
-        // A confirmed match is exactly what makes it show up in
-        // my_conversations(), so the chat list needs to know too.
-        ref.invalidate(conversationsProvider);
-      }
-    } catch (_) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't update this match. Try again.")),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final statusColor =
-        match.matchedItemIsLost ? theme.colorScheme.error : theme.colorScheme.tertiary;
-    final isPending = match.status == 'pending';
-
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: SizedBox(
-                    width: 64,
-                    height: 64,
-                    child: match.matchedItemImageUrl == null
-                        ? Container(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            child: Icon(Icons.image_outlined,
-                                color: theme.colorScheme.onSurfaceVariant),
-                          )
-                        : CachedNetworkImage(
-                            imageUrl: match.matchedItemImageUrl!,
-                            fit: BoxFit.cover,
-                            placeholder: (context, url) =>
-                                Container(color: theme.colorScheme.surfaceContainerHighest),
-                          ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: statusColor.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              match.matchedItemIsLost ? 'LOST' : 'FOUND',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: statusColor,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${(match.similarityScore * 100).round()}% match',
-                            style: theme.textTheme.labelSmall
-                                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(match.matchedItemTitle, style: theme.textTheme.titleSmall),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Compared with your "${match.myItemTitle}" · '
-                        '${DateFormat.MMMd().format(match.createdAt)}',
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                      ),
-                      if (match.imageSimilarity != null ||
-                          match.textSimilarity != null ||
-                          match.distanceMeters != null ||
-                          match.timeProximity != null) ...[
-                        const SizedBox(height: 4),
-                        _ScoreBreakdown(match: match),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            if (isPending) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => _act(ref, context, 'dismissed'),
-                      child: const Text('Not a match'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () => _act(ref, context, 'confirmed'),
-                      child: const Text('This is it!'),
-                    ),
-                  ),
-                ],
-              ),
-            ] else if (match.status == 'confirmed') ...[
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: () => context.push(
-                  '/chat',
-                  extra: ChatScreenArgs(
-                    matchId: match.matchId,
-                    otherUserId: match.matchedItemUserId,
-                    otherItemTitle: match.matchedItemTitle,
-                    myItemId: match.myItemId,
-                    matchedItemId: match.matchedItemId,
-                    matchedItemType: match.matchedItemType,
-                  ),
-                ),
-                icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                label: const Text('Message'),
-              ),
-            ] else ...[
-              const SizedBox(height: 8),
-              Text(
-                'Dismissed',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// "📷 92% · 📝 78% · 📍 1.2 km · 🕐 6h apart" — the ingredients behind the
-/// headline "XX% match" figure, shown only for whichever signals this
-/// particular pair actually has (see MatchModel's doc on why each is
-/// independently nullable). Distance and time are shown in real units
-/// rather than as another percentage each, since "1.2 km apart"/"6h apart"
-/// are more immediately meaningful than a raw proximity score would be on
-/// its own.
-class _ScoreBreakdown extends StatelessWidget {
-  const _ScoreBreakdown({required this.match});
-
-  final MatchModel match;
-
-  /// time_proximity_score() is exp(-hours_apart / 72) — inverted here to
-  /// recover an approximate hours-apart figure for display, since that's
-  /// what a person actually wants to read ("6h apart"), not the 0..1
-  /// score itself.
-  String _approxHoursApartLabel(double timeProximity) {
-    if (timeProximity <= 0) return 'days apart';
-    final hoursApart = -72 * math.log(timeProximity);
-    if (hoursApart < 1) return '<1h apart';
-    if (hoursApart < 48) return '${hoursApart.round()}h apart';
-    return '${(hoursApart / 24).round()}d apart';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final parts = <String>[];
-
-    if (match.imageSimilarity != null) {
-      parts.add('📷 ${(match.imageSimilarity! * 100).round()}%');
-    }
-    if (match.textSimilarity != null) {
-      parts.add('📝 ${(match.textSimilarity! * 100).round()}%');
-    }
-    if (match.distanceMeters != null) {
-      final km = match.distanceMeters! / 1000;
-      parts.add(km < 1 ? '📍 ${match.distanceMeters!.round()} m' : '📍 ${km.toStringAsFixed(1)} km');
-    }
-    if (match.timeProximity != null) {
-      parts.add('🕐 ${_approxHoursApartLabel(match.timeProximity!)}');
-    }
-
-    return Text(
-      parts.join('  ·  '),
-      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
     );
   }
 }
