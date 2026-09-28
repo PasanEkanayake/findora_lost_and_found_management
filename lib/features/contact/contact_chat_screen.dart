@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -35,15 +37,28 @@ class ContactChatScreen extends ConsumerStatefulWidget {
 
 class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
   final _controller = TextEditingController();
+  Timer? _syncTimer;
+  String? _lastMarkedReadId;
 
   @override
   void initState() {
     super.initState();
-    ref.read(contactRepositoryProvider).markThreadRead(widget.args.threadId);
+    final repo = ref.read(contactRepositoryProvider);
+    repo.markThreadRead(widget.args.threadId);
+    // The message provider stays alive between visits (see
+    // contactMessagesStreamProvider), so anything sent while this screen
+    // was closed is pulled in straight away instead of after the first tick.
+    repo.syncNow(widget.args.threadId);
+    // Safety net for the realtime channel — see ContactRepository.syncNow.
+    _syncTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => repo.syncNow(widget.args.threadId),
+    );
   }
 
   @override
   void dispose() {
+    _syncTimer?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -71,6 +86,19 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
     final theme = Theme.of(context);
     final myId = supabase.auth.currentUser?.id;
     final messagesAsync = ref.watch(contactMessagesStreamProvider(widget.args.threadId));
+
+    // A message that arrives while this screen is open is read the moment
+    // it appears — without this it would stay "unread" (and show a badge
+    // in the Chats list) until the thread was next reopened.
+    ref.listen(contactMessagesStreamProvider(widget.args.threadId), (previous, next) {
+      final messages = next.value;
+      if (messages == null || messages.isEmpty) return;
+      final latest = messages.last;
+      if (latest.senderId != myId && latest.id != _lastMarkedReadId) {
+        _lastMarkedReadId = latest.id;
+        ref.read(contactRepositoryProvider).markThreadRead(widget.args.threadId);
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(
