@@ -1,11 +1,25 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../core/supabase/supabase_client.dart';
 import 'contact_message_model.dart';
 import 'contact_thread_model.dart';
+
+/// Hooks into one open thread's live message list, so code outside
+/// [ContactRepository.streamMessages] (sending a message, the screen's
+/// periodic sync) can push rows into it. Registered while a stream has a
+/// listener, removed when it doesn't.
+class _LiveThread {
+  const _LiveThread({required this.upsert, required this.syncNewer});
+
+  final void Function(Map<String, dynamic> record) upsert;
+  final Future<void> Function() syncNewer;
+}
+
+final Map<String, _LiveThread> _liveThreads = {};
 
 class ContactRepository {
   const ContactRepository();
@@ -51,6 +65,7 @@ class ContactRepository {
       final index = current.indexWhere((m) => m.id == message.id);
       if (index == -1) {
         current.add(message);
+        current.sort((a, b) => a.createdAt.compareTo(b.createdAt));
       } else {
         current[index] = message;
       }
@@ -82,8 +97,36 @@ class ContactRepository {
       }
     }
 
+    /// Fetches only messages newer than what's already on screen. The
+    /// realtime channel below is the primary path, but a websocket can be
+    /// down (Realtime not enabled for this table — see
+    /// supabase/11_realtime_and_matching_fixes.sql — or just a flaky
+    /// mobile connection), and without this a message from the other
+    /// person would then only show up after reopening the app.
+    Future<void> syncNewer() async {
+      try {
+        DateTime? newest;
+        for (final m in current) {
+          if (newest == null || m.createdAt.isAfter(newest)) newest = m.createdAt;
+        }
+        final base = supabase
+            .from(AppConstants.contactMessagesTable)
+            .select()
+            .eq('thread_id', threadId);
+        final filtered =
+            newest == null ? base : base.gt('created_at', newest.toUtc().toIso8601String());
+        final rows = await filtered.order('created_at');
+        for (final row in rows as List) {
+          upsert(row as Map<String, dynamic>);
+        }
+      } catch (_) {
+        // Best-effort by design — the next tick just tries again.
+      }
+    }
+
     controller = StreamController<List<ContactMessageModel>>.broadcast(
       onListen: () {
+        _liveThreads[threadId] = _LiveThread(upsert: upsert, syncNewer: syncNewer);
         loadInitial();
         channel = supabase
             .channel('contact_messages:$threadId')
@@ -112,9 +155,16 @@ class ContactRepository {
               ),
               callback: (payload) => upsert(payload.newRecord),
             )
-            .subscribe();
+            .subscribe((status, error) {
+              // If messages ever stop arriving live, this line in the
+              // `flutter run` console is the first thing to look at:
+              // anything other than `subscribed` means Realtime isn't
+              // delivering for this table.
+              debugPrint('contact_messages realtime [$threadId]: $status ${error ?? ''}');
+            });
       },
       onCancel: () {
+        _liveThreads.remove(threadId);
         final ch = channel;
         if (ch != null) supabase.removeChannel(ch);
       },
@@ -123,12 +173,33 @@ class ContactRepository {
     return controller.stream;
   }
 
+  /// Pulls in anything newer than what [threadId]'s open screen is
+  /// showing. No-op when that thread isn't currently open. Called on a
+  /// short timer by ContactChatScreen as a safety net for the realtime
+  /// channel.
+  Future<void> syncNow(String threadId) async {
+    await _liveThreads[threadId]?.syncNewer();
+  }
+
+  /// Inserts the message and returns immediately with the stored row,
+  /// which is pushed straight into the open thread's list. The sender's
+  /// own message therefore appears right away from the insert's own
+  /// response, instead of depending on the realtime channel echoing it
+  /// back (which is what made messages appear "only after reopening the
+  /// app" when Realtime wasn't delivering). If the realtime event for the
+  /// same row arrives afterwards, it just replaces the identical entry by
+  /// id — no duplicate.
   Future<void> sendMessage({required String threadId, required String content}) async {
-    await supabase.from(AppConstants.contactMessagesTable).insert({
-      'thread_id': threadId,
-      'sender_id': supabase.auth.currentUser!.id,
-      'content': content,
-    });
+    final row = await supabase
+        .from(AppConstants.contactMessagesTable)
+        .insert({
+          'thread_id': threadId,
+          'sender_id': supabase.auth.currentUser!.id,
+          'content': content,
+        })
+        .select()
+        .single();
+    _liveThreads[threadId]?.upsert(row);
   }
 
   Future<void> markThreadRead(String threadId) async {
