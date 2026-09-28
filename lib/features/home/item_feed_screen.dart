@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import 'items_map_view.dart';
 import '../../core/providers/auth_providers.dart';
+import '../../core/widgets/item_photo.dart';
 import '../../core/widgets/new_badge.dart';
 import '../../core/widgets/shimmer_list.dart';
 import '../profile/data/profile_providers.dart';
@@ -435,28 +435,9 @@ class _ItemCard extends StatelessWidget {
                 child: SizedBox(
                   width: 72,
                   height: 72,
-                  child: item.imageUrls.isEmpty
-                      ? Container(
-                          color: theme.colorScheme.surfaceContainerHighest,
-                          child: Icon(
-                            Icons.image_outlined,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        )
-                      : CachedNetworkImage(
-                          imageUrl: item.imageUrls.first,
-                          fit: BoxFit.cover,
-                          placeholder: (context, url) => Container(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                          ),
-                          errorWidget: (context, url, error) => Container(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            child: Icon(
-                              Icons.broken_image_outlined,
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
+                  child: ItemPhoto(
+                    url: item.imageUrls.isEmpty ? null : item.imageUrls.first,
+                  ),
                 ),
               ),
               const SizedBox(width: 14),
