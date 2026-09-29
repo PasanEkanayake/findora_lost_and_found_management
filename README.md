@@ -78,6 +78,8 @@ genuinely optional — see their own rows below).
 
 | Claim status crash + staleness | Filing/approving a claim could crash with a framework tree-consistency error ("_owner != null" / "_children.contains(child)"), because match cards in a list had no stable identity for Flutter to track when a match moved from pending to decided. Separately, the claim/return status banner in a chat only ever loaded once, so the other person's already-open chat never showed a claim was filed, approved, etc. until they left and reopened it | None |
 
+| Matches filter, and bigger claim buttons | The Matches tab's filter chips now split "Text match" into **Image only / Text only / Both** — meaningful since a match can now come from text alone (see the previous row). Reject/Approve on a claim are now full-width, like every other paired button in the app, instead of the small content-sized pair from the last fix — bigger and easier to tap | None |
+
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
 `05` and `08` are required, `06`/`07` are optional but harmless to run
 anyway:
