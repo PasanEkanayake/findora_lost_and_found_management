@@ -80,6 +80,11 @@ genuinely optional — see their own rows below).
 
 | Matches filter, and bigger claim buttons | The Matches tab's filter chips now split "Text match" into **Image only / Text only / Both** — meaningful since a match can now come from text alone (see the previous row). Reject/Approve on a claim are now full-width, like every other paired button in the app, instead of the small content-sized pair from the last fix — bigger and easier to tap | None |
 
+| Returned items go private | Once the finder taps "Mark as returned", **both** posts (found and lost) are retired together and hidden from Browse, search, the map, and everyone else's matches — visible only to their two owners, in **Profile → Returned items**. Before this, only the found post was ever resolved, so its matched lost post kept appearing and kept confusing other people's matching | **Required:** run `supabase/13_returned_items_and_ratings.sql` |
+| Ratings & reviews screen | **Profile → Ratings & reviews** shows your average, a star breakdown, and every review — received and given — with its own tab for each. A rating's written comment is now private to the two people involved (previously any signed-in user could read it) | Included in migration 13 above |
+| Home feed: Lost / Found filter | A three-way **All / Lost / Found** switch under the search box, each with a live count. Applied client-side (instant, no reload) alongside the existing category and search filters | None |
+| User manual, Privacy policy, Safety guidelines | Three full documents under Profile, plus **Help & support** now links to all three and groups its FAQs by topic. Content lives in one place (`lib/features/profile/document/document_content.dart`) with matching Markdown copies in `docs/` for publishing (e.g. an app-store privacy-policy URL) | None |
+
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
 `05` and `08` are required, `06`/`07` are optional but harmless to run
 anyway:
@@ -89,8 +94,11 @@ in — see its header comment and "Email confirmation flow" below),
 `08_soft_delete.sql`, `09_account_deletion.sql`,
 `10_open_matching_and_time.sql`,
 `11_realtime_and_matching_fixes.sql` (live chat + AI matching fixes —
-required), and finally `12_text_matching.sql` (matching by title/
-description, independent of photos — required).
+required), `12_text_matching.sql` (matching by title/description,
+independent of photos — required), and finally
+`13_returned_items_and_ratings.sql` (returned posts become private to
+their two owners, plus the Returned items and Ratings & reviews sections
+— required).
 
 ---
 
@@ -239,10 +247,13 @@ warnings about Chrome or Xcode if you don't plan to build for web/iOS.
    specifically has two placeholders to edit before running it — see
    "Email confirmation flow" further down.
 7c. Then `08_soft_delete.sql`, `09_account_deletion.sql`,
-   `10_open_matching_and_time.sql`, `11_realtime_and_matching_fixes.sql`
-   and `12_text_matching.sql`, in that order. Each is safe to re-run.
-   `08`, `10`, `11` and `12` are needed for the current app code to work
-   properly (see the top of this file).
+   `10_open_matching_and_time.sql`, `11_realtime_and_matching_fixes.sql`,
+   `12_text_matching.sql` and `13_returned_items_and_ratings.sql`, in that
+   order. Each is safe to re-run. `08`, `10`, `11`, `12` and `13` are
+   needed for the current app code to work properly (see the top of this
+   file). After `13`, run `select public.rematch_all_text();` isn't needed
+   again, but if you have posts that were already returned before it, see
+   that migration's header for the one-time backfill it runs automatically.
 8. In the left sidebar, click the gear icon (**Project Settings**) →
    **API Keys**. Copy two values, you'll need them in the next step:
    - **Project URL** (looks like `https://xxxxx.supabase.co`)
@@ -796,26 +807,46 @@ taps:
 - **Edit profile** (pencil icon next to the avatar) — updates
   `full_name`/`phone` on the `profiles` row, and uploads a new avatar to
   the `avatars` Storage bucket (already set up back in Phase 1).
-- **My reported items** — every item you've posted, any status, with a
-  status badge (open/matched/claimed/resolved) — unlike the main feed,
-  which only shows open items. Swipe a card left, or tap its trailing
-  delete icon, to remove a post from the app (`ItemsRepository.deleteItem`
-  — a soft delete, see "Soft delete: items are hidden, never erased"
-  below for what that actually does).
-- **Appearance** — Light/Dark/System, persisted via `shared_preferences`
-  (`core/theme/theme_mode_controller.dart`). Overrides the OS setting
-  until switched back to "System default".
+- **My reported items** — posts still in play: open, matched or claimed.
+  A **returned** post doesn't appear here any more — see the next item.
+  Swipe a card left, or tap its trailing delete icon, to remove a post
+  (`ItemsRepository.deleteItem` — a soft delete, see "Soft delete: items
+  are hidden, never erased" below).
+- **Returned items** (`ReturnedItemsScreen`,
+  `ItemsRepository.fetchMyReturnedItems` → the `my_returned_items()` RPC)
+  — every post of yours that's been handed back, next to the post it was
+  returned with, with both people's ratings and a way to reopen the chat.
+  This is the *only* place either post is still visible at all, and only
+  to the two owners — see "Returned items become private" below.
+- **Ratings & reviews** (`RatingsScreen`, the `my_ratings()` RPC) —
+  average, star breakdown, and every review, split into Received/Given tabs.
 - **Notification settings** — reads the actual OS-level permission via
   `FirebaseMessaging.getNotificationSettings()`, and a toggle that
   registers or clears this device's push token on your profile. Real
   state, not a decorative switch.
-- **Privacy & safety** — meetup safety guidance and a plain explanation
-  of what's shared with other users vs. kept private.
-- **Help & support** — an FAQ plus a "Contact support" button that opens
-  a pre-filled `mailto:` email. This needed a new direct dependency
-  (`url_launcher`) and a manifest `<queries>` entry for the `mailto:`
-  scheme — Android 11+ hides apps from `canLaunchUrl`/`launchUrl` unless
-  you declare you're looking for them.
+- **Appearance** — Light/Dark/System, persisted via `shared_preferences`
+  (`core/theme/theme_mode_controller.dart`). Overrides the OS setting
+  until switched back to "System default".
+- **User manual** (`UserManualScreen`) — the whole app and process,
+  collapsible sections.
+- **Safety guidelines** (`SafetyGuidelinesScreen`) — meeting up safely and
+  spotting scams.
+- **Privacy policy** (`PrivacyPolicyScreen`) — what's collected, who can
+  see it, and your choices.
+- **Help & support** — links to all three documents above, an FAQ grouped
+  by topic, and a "Contact support" button that opens a pre-filled
+  `mailto:` email (`url_launcher`, plus a manifest `<queries>` entry for
+  the `mailto:` scheme — Android 11+ hides apps from
+  `canLaunchUrl`/`launchUrl` unless you declare you're looking for them).
+
+All four documents' text lives in one place —
+`lib/features/profile/document/document_content.dart` — as a list of
+typed content blocks (`DocHeading`/`DocParagraph`/`DocBullets`/`DocSteps`/
+`DocCallout`), rendered by `document/document_blocks.dart`. Matching
+Markdown copies are in `docs/` (`USER_MANUAL.md`,
+`SAFETY_GUIDELINES.md`, `PRIVACY_POLICY.md`) for publishing outside the
+app — an app-store listing's privacy-policy URL, for instance. The two
+aren't generated from each other; edit both if the content changes.
 
 ## The "Report item" button (Home and Matches only)
 
@@ -1278,6 +1309,12 @@ just renders a blank/grey map until one is added.
   not client-side filtering — `itemsFeedProvider` is a `.family` provider
   keyed on `ItemsFilter(categoryId, searchQuery)`. The search box
   debounces 400ms before refetching.
+- **Lost / Found** is a third filter, but deliberately client-side: it's
+  applied to whatever `itemsFeedProvider` already returned, with an
+  instant switch and no refetch, and its own "N lost · N found" counts
+  stay based on the *category/search* filter rather than itself (so
+  picking "Lost" doesn't make the Found count disappear). See
+  `_TypeSwitch` in `item_feed_screen.dart`.
 - The map toggle swaps the list for `ItemsMapView`, centering on the
   device's location and plotting open items within 5km via `nearby_items()`
   — red pins for lost, green for found.
@@ -1286,6 +1323,78 @@ just renders a blank/grey map until one is added.
   serialize predictably over PostgREST.
 - Not yet built: the map doesn't share the list's filters, and there's no
   date filter beyond the map's fixed radius.
+
+## Returned items become private (Phase 9)
+
+Once `mark_returned()` runs (see "Claims, trust, and moderation" above),
+both posts in the pair leave every shared list:
+
+- `supabase/13_returned_items_and_ratings.sql` replaces the items
+  `select` policy: a `'resolved'` post is visible only to its own owner,
+  the person it was returned with (`returned_with_user_id`), or an admin.
+  Everything that reads items as the signed-in user — the feed, search,
+  the map's `nearby_items()`, `my_matches()`, `my_conversations()`,
+  `my_contact_threads()` — inherits this for free, since RLS applies no
+  matter which query reaches the table.
+- `item_images` get the same treatment one level down: a photo is visible
+  exactly when its post is.
+- `my_matches()` additionally excludes any match where either side has
+  been resolved, so a just-returned pair also disappears from the
+  Matches tab (not only from Browse).
+- The pair is still reachable, by its two owners only, through
+  `my_returned_items()` → **Profile → Returned items**
+  (`ReturnedItemsScreen`).
+- A found post resolved by the *old* code (before this migration) had no
+  recorded counterpart — the migration backfills one where an approved
+  claim and a confirmed match identify it unambiguously, and resolves the
+  matching lost post too, so old returns end up looking the same as new
+  ones. A pair that can't be paired this way still appears in Returned
+  items for its owner, just without the other side.
+
+## Open-source alternative to Google Maps / geocoding
+
+The app currently uses `google_maps_flutter` for the map (item detail
+preview, `ItemsMapView`, `LocationPickerScreen`) and the `geocoding`
+package for turning coordinates into an address label — the latter calls
+through to each OS's own geocoder, which on Android is backed by Google.
+Both need a Google Maps API key (see "Google Maps setup" below).
+
+Yes, there's a genuinely open-source path, built on
+[OpenStreetMap](https://www.openstreetmap.org) data:
+
+- **Map rendering**: [`flutter_map`](https://pub.dev/packages/flutter_map)
+  (BSD-3, pure Dart/Flutter, no API key) draws OSM tiles instead of Google's.
+  It's a drop-in replacement for the map *widget* — markers, tap-to-select,
+  a draggable center pin — but not for `google_maps_flutter`'s API
+  directly, so `ItemsMapView` and `LocationPickerScreen` would need
+  rewriting against its `FlutterMap`/`TileLayer`/`Marker` types.
+- **Geocoding** (coordinates → address label):
+  [Nominatim](https://nominatim.org), OpenStreetMap's own search engine,
+  free with no key. Its public instance is rate-limited to **1 request/
+  second**, requires a descriptive `User-Agent` identifying your app, and
+  forbids bulk/autocomplete use — fine for "reverse-geocode the pin the
+  person just dropped" (one request per post), not for something calling
+  it in a loop.
+
+What this does **not** remove: `google_maps_flutter` is also how the
+Report-item flow gets the device's *current* location in the first place
+— that's the `geolocator` package (already open source, MIT, no Google
+dependency) reading the OS location API directly, unrelated to which map
+you draw afterward.
+
+Two things worth knowing before switching:
+- **The OSM public tile server (`tile.openstreetmap.org`) is not meant for
+  production apps** — its own documentation says as much. For anything
+  beyond development, either self-host tiles or use a free-tier host
+  built for this (MapTiler, Stadia Maps, Thunderforest, or Geoapify), and
+  set that host's URL as `flutter_map`'s `TileLayer.urlTemplate`.
+- **Attribution is required** wherever the map is shown — `flutter_map`
+  has a built-in `RichAttributionWidget` for this, and Nominatim results
+  need an OpenStreetMap credit too.
+
+This is a genuine swap of a working system, not a small patch, so I
+haven't made it without being asked — happy to build it as its own
+change if you'd like the app running fully key-free.
 
 ## Firebase setup for push notifications (Phase 7)
 
@@ -1353,11 +1462,21 @@ be set up against your own project.
    Reject it.
 3. Approving runs a trigger (`handle_claim_approved`) that moves the item
    to `'claimed'` automatically.
-4. Once claimed, the finder gets a "Mark as returned" button, moving the
-   item to `'resolved'`.
-5. Resolving surfaces a star-rating prompt. Ratings write to a `ratings`
-   table, and a trigger (`handle_new_rating`) recomputes
-   `profiles.rating`/`rating_count` from it.
+4. Once claimed, the finder gets a "Mark as returned" button. This calls
+   the `mark_returned()` RPC (`supabase/13_returned_items_and_ratings.sql`)
+   rather than a plain `update` — it re-checks that the return is real
+   (an approved claim, a confirmed match) and resolves **both** posts
+   together, recording which post/person each was returned with
+   (`items.returned_with_item_id`/`returned_with_user_id`). A resolved
+   post is then visible only to its two owners — see "Returned items
+   become private" below — and shows up for both of them in
+   **Profile → Returned items**.
+5. Resolving surfaces a star-rating prompt (also reachable later from
+   Returned items). Ratings write to a `ratings` table, and a trigger
+   (`handle_new_rating`) recomputes `profiles.rating`/`rating_count` from
+   it. A rating's written comment is readable only by the two people
+   involved (migration 13's RLS policy) — the profile-wide average and
+   count are still public.
 
 **Item detail screen**: tapping a feed/map card opens `ItemDetailScreen`
 — full description, every photo, and a "Report this item" action.
