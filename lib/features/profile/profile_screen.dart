@@ -142,8 +142,31 @@ class ProfileScreen extends ConsumerWidget {
           ListTile(
             leading: const Icon(Icons.inventory_2_outlined),
             title: const Text('My reported items'),
+            subtitle: const Text('Posts still being worked on'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/profile/my-items'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.task_alt),
+            title: const Text('Returned items'),
+            subtitle: const Text('Private to you and the other person'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/returned'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.star_outline_rounded),
+            title: const Text('Ratings & reviews'),
+            subtitle: profileAsync.maybeWhen(
+              data: (profile) => Text(
+                profile.ratingCount == 0
+                    ? 'None yet'
+                    : '${profile.rating.toStringAsFixed(1)} average · '
+                        '${profile.ratingCount} rating${profile.ratingCount == 1 ? '' : 's'}',
+              ),
+              orElse: () => null,
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/ratings'),
           ),
           ListTile(
             leading: const Icon(Icons.notifications_outlined),
@@ -151,13 +174,37 @@ class ProfileScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/profile/notifications'),
           ),
-          ListTile(
-            leading: const Icon(Icons.shield_outlined),
-            title: const Text('Privacy & safety'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/profile/privacy-safety'),
-          ),
           const _AppearanceTile(),
+          const Divider(height: 32),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(
+              'HELP & INFORMATION',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.6,
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.menu_book_outlined),
+            title: const Text('User manual'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/manual'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.health_and_safety_outlined),
+            title: const Text('Safety guidelines'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/safety'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.privacy_tip_outlined),
+            title: const Text('Privacy policy'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/privacy'),
+          ),
           ListTile(
             leading: const Icon(Icons.help_outline),
             title: const Text('Help & support'),
