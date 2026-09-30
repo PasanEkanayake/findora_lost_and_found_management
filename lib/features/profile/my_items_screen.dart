@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,17 +6,51 @@ import 'package:intl/intl.dart';
 import '../items/data/item_model.dart';
 import '../items/data/items_providers.dart';
 import '../../core/widgets/confirm_dialog.dart';
+import '../../core/widgets/item_photo.dart';
 import '../../core/widgets/shimmer_list.dart';
 
-/// Every item the signed-in user has posted, regardless of status —
-/// reachable from ProfileScreen. Unlike the main feed, this shows
-/// resolved/claimed items too, with a status badge so the user can tell
-/// them apart at a glance. Swipe a card left to delete it.
-class MyItemsScreen extends ConsumerWidget {
+/// The signed-in user's posts that are still in play — open, matched or
+/// claimed — reachable from ProfileScreen as "My reported items", with a
+/// status badge so the user can tell them apart at a glance. Swipe a card
+/// left to delete it.
+///
+/// A **returned** post doesn't appear here: once an item is handed back,
+/// both posts involved move to their own "Returned items" section
+/// (see ReturnedItemsScreen) and become private to their two owners —
+/// see ItemsRepository.fetchMyItems's doc for why.
+class MyItemsScreen extends ConsumerStatefulWidget {
   const MyItemsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MyItemsScreen> createState() => _MyItemsScreenState();
+}
+
+class _MyItemsScreenState extends ConsumerState<MyItemsScreen> {
+  /// Ids removed this session but possibly not yet reflected by
+  /// [myItemsProvider] — see [_onDeleted] for why this exists. Never
+  /// cleared; it can only ever hold a handful of ids for as long as the
+  /// screen stays open; a fresh provider load (screen reopened) starts
+  /// with an empty set anyway since state is recreated.
+  final Set<String> _removedIds = {};
+
+  /// Hides an item the moment it's confirmed deleted, instead of waiting
+  /// for [myItemsProvider] to refetch and return a list without it.
+  ///
+  /// Without this, `Dismissible.onDismissed` finishing its swipe animation
+  /// can still find this item's id in the *old* `items` list if the
+  /// network refetch triggered by `ref.invalidate` hasn't resolved by the
+  /// next frame — which rebuilds the same `Dismissible` with the same key
+  /// right after it already reported itself dismissed. Flutter treats
+  /// that as the framework's classic "a dismissed Dismissible is still in
+  /// the tree" error. Filtering locally means the card disappears exactly
+  /// once, synchronously, regardless of how long the refetch takes.
+  void _onDeleted(String itemId) {
+    setState(() => _removedIds.add(itemId));
+    ref.invalidate(myItemsProvider);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final itemsAsync = ref.watch(myItemsProvider);
 
     return Scaffold(
@@ -32,7 +65,9 @@ class MyItemsScreen extends ConsumerWidget {
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
           ),
-          data: (items) {
+          data: (allItems) {
+            final items =
+                allItems.where((item) => !_removedIds.contains(item.id)).toList();
             if (items.isEmpty) {
               return LayoutBuilder(
                 builder: (context, constraints) => SingleChildScrollView(
@@ -70,7 +105,8 @@ class MyItemsScreen extends ConsumerWidget {
               padding: const EdgeInsets.all(16),
               itemCount: items.length,
               separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (context, index) => _MyItemCard(item: items[index]),
+              itemBuilder: (context, index) =>
+                  _MyItemCard(item: items[index], onDeleted: _onDeleted),
             );
           },
         ),
@@ -80,9 +116,13 @@ class MyItemsScreen extends ConsumerWidget {
 }
 
 class _MyItemCard extends ConsumerWidget {
-  const _MyItemCard({required this.item});
+  const _MyItemCard({required this.item, required this.onDeleted});
 
   final ItemModel item;
+
+  /// Called once the item is confirmed deleted on the server — see
+  /// [_MyItemsScreenState._onDeleted].
+  final ValueChanged<String> onDeleted;
 
   Color _statusColor(BuildContext context) {
     final theme = Theme.of(context);
@@ -136,9 +176,10 @@ class _MyItemCard extends ConsumerWidget {
       onDismissed: (_) {
         // The delete already happened inside confirmDismiss (so the
         // snackbar on failure has a stable screen to attach to) — this
-        // just lets the item's own myItemsProvider entry disappear from
-        // the list via a normal invalidate, same as any other mutation.
-        ref.invalidate(myItemsProvider);
+        // just needs to make the card disappear, which onDeleted does
+        // synchronously (see its doc for why that can't wait on a
+        // provider refetch).
+        onDeleted(item.id);
       },
       background: Container(
         alignment: Alignment.centerRight,
@@ -163,18 +204,9 @@ class _MyItemCard extends ConsumerWidget {
                   child: SizedBox(
                     width: 68,
                     height: 68,
-                    child: item.imageUrls.isEmpty
-                        ? Container(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            child: Icon(Icons.image_outlined,
-                                color: theme.colorScheme.onSurfaceVariant),
-                          )
-                        : CachedNetworkImage(
-                            imageUrl: item.imageUrls.first,
-                            fit: BoxFit.cover,
-                            placeholder: (context, url) =>
-                                Container(color: theme.colorScheme.surfaceContainerHighest),
-                          ),
+                    child: ItemPhoto(
+                      url: item.imageUrls.isEmpty ? null : item.imageUrls.first,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -223,7 +255,7 @@ class _MyItemCard extends ConsumerWidget {
                   color: theme.colorScheme.onSurfaceVariant,
                   onPressed: () async {
                     if (await _confirmDelete(context, ref)) {
-                      ref.invalidate(myItemsProvider);
+                      onDeleted(item.id);
                     }
                   },
                 ),
