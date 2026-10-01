@@ -28,8 +28,12 @@ import '../../features/profile/admin_reports_screen.dart';
 import '../../features/profile/edit_profile_screen.dart';
 import '../../features/profile/my_items_screen.dart';
 import '../../features/profile/notification_settings_screen.dart';
-import '../../features/profile/privacy_safety_screen.dart';
 import '../../features/profile/help_support_screen.dart';
+import '../../features/profile/privacy_policy_screen.dart';
+import '../../features/profile/ratings_screen.dart';
+import '../../features/profile/returned_items_screen.dart';
+import '../../features/profile/safety_guidelines_screen.dart';
+import '../../features/profile/user_manual_screen.dart';
 
 /// Bridges a Stream (Supabase's auth state changes) into the Listenable
 /// that go_router's `refreshListenable` expects, so the router re-evaluates
@@ -137,8 +141,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const NotificationSettingsScreen(),
       ),
       GoRoute(
-        path: '/profile/privacy-safety',
-        builder: (context, state) => const PrivacySafetyScreen(),
+        path: '/profile/returned',
+        builder: (context, state) => const ReturnedItemsScreen(),
+      ),
+      GoRoute(
+        path: '/profile/ratings',
+        builder: (context, state) => const RatingsScreen(),
+      ),
+      GoRoute(
+        path: '/profile/manual',
+        builder: (context, state) => const UserManualScreen(),
+      ),
+      GoRoute(
+        path: '/profile/privacy',
+        builder: (context, state) => const PrivacyPolicyScreen(),
+      ),
+      GoRoute(
+        path: '/profile/safety',
+        builder: (context, state) => const SafetyGuidelinesScreen(),
       ),
       GoRoute(
         path: '/profile/help',
