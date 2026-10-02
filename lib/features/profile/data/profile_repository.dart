@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/supabase/supabase_client.dart';
 import 'profile_model.dart';
+import 'rating_model.dart';
 
 class ProfileRepository {
   const ProfileRepository();
@@ -53,6 +54,16 @@ class ProfileRepository {
         .update({'avatar_url': publicUrl}).eq('id', userId);
 
     return publicUrl;
+  }
+
+  /// Every rating the signed-in user received or gave, newest first —
+  /// backed by the `my_ratings()` RPC. Only the two people involved in a
+  /// rating can read it (see supabase/13_returned_items_and_ratings.sql).
+  Future<List<RatingModel>> fetchMyRatings() async {
+    final rows = await supabase.rpc('my_ratings');
+    return (rows as List<dynamic>)
+        .map((row) => RatingModel.fromMap(row as Map<String, dynamic>))
+        .toList();
   }
 
   /// Calls request_account_deletion() (supabase/09_account_deletion.sql)
