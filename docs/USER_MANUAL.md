@@ -15,11 +15,12 @@ How to use Findora, from creating an account to getting an item back and rating 
 9. [Messaging someone directly](#9-messaging-someone-directly)
 10. [Returned items](#10-returned-items)
 11. [Ratings and reviews](#11-ratings-and-reviews)
-12. [Notifications](#12-notifications)
-13. [Your profile and account](#13-your-profile-and-account)
-14. [Privacy and safety at a glance](#14-privacy-and-safety-at-a-glance)
-15. [Troubleshooting](#15-troubleshooting)
-16. [Glossary](#16-glossary)
+12. [The Alerts tab](#12-the-alerts-tab)
+13. [Push notification settings](#13-push-notification-settings)
+14. [Your profile and account](#14-your-profile-and-account)
+15. [Privacy and safety at a glance](#15-privacy-and-safety-at-a-glance)
+16. [Troubleshooting](#16-troubleshooting)
+17. [Glossary](#17-glossary)
 
 ## 1. Welcome to Findora
 
@@ -154,7 +155,7 @@ The **Contact** button on any post opens a private chat with whoever posted it. 
 
 - Direct chats are plain conversations: there is no claim or rating step in them.
 - For the full claim-and-return process the two posts must be a **confirmed match**. If you think a post is yours, tap **This might be mine** / **I think I found this** and report your own post so Findora can compare them.
-- All your conversations are in the **Chats** tab. Unread messages are badged, and new messages appear on their own.
+- All your conversations are in the **Chats** tab, which shows a number badge in the bottom navigation whenever you have unread messages.
 
 ## 10. Returned items
 
@@ -174,20 +175,29 @@ After a return, each person can rate the other from 1 to 5 stars with an optiona
 
 > **Tip:** Be fair and specific. A short note such as "turned up on time and was very kind" helps the next person decide whether to trust you.
 
-## 12. Notifications
+## 12. The Alerts tab
 
-**Profile → Notification settings** shows whether this phone is allowed to send you alerts and lets you switch them on or off. If your phone blocks notifications, the screen tells you where to enable them.
+The **Alerts** tab is a running list of everything that's happened on your posts: new matches, a match being confirmed, a claim filed or decided, an item marked as returned, and new ratings. It shows a number badge whenever something is unread.
 
-Whatever you choose, your matches and messages are always waiting in the **Matches** and **Chats** tabs.
+- Tap an alert to jump straight to it — a new match opens that post's matches, a claim or return opens the right chat, and a rating opens Ratings & reviews.
+- Unread alerts have a dot and a tinted background. Tap one, or use **Mark all read** at the top, to clear it.
 
-## 13. Your profile and account
+> **Note:** Ordinary chat messages aren't listed here — the **Chats** tab's own badge is where those show up, so this list stays focused on the less frequent, bigger moments.
+
+## 13. Push notification settings
+
+**Profile → Notification settings** shows whether this phone is allowed to send you push alerts and lets you switch them on or off. If your phone blocks notifications, the screen tells you where to enable them.
+
+Whatever you choose, your matches, messages and alerts are always waiting in the app — in the **Matches**, **Chats** and **Alerts** tabs.
+
+## 14. Your profile and account
 
 - **Edit profile**: your name, an optional phone number, and your photo.
 - **Appearance**: Light, Dark, or match your phone.
 - **Sign out** ends your session on this phone.
 - **Delete account** signs you out for good and removes your name, photo and phone number. Your posts are hidden and you can't sign in again. Conversations other people had with you remain for them, and your name in them appears as "Findora user". This can't be undone.
 
-## 14. Privacy and safety at a glance
+## 15. Privacy and safety at a glance
 
 - Meet in public, tell someone, and don't hand anything over until you're convinced by the claim.
 - Your email is never shown to other users. Your phone number is only in your own profile.
@@ -196,7 +206,7 @@ Whatever you choose, your matches and messages are always waiting in the **Match
 
 Read the full **Privacy policy** and **Safety guidelines** from the Profile tab.
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 ### I'm not getting any matches
 
@@ -225,7 +235,7 @@ Check your connection. The chat refreshes every few seconds, and reopening the c
 
 Use **Profile → Help & support → Contact support**.
 
-## 16. Glossary
+## 17. Glossary
 
 - **Post**: a Lost or Found report.
 - **Match**: a suggested pairing of one lost post and one found post from different people.
