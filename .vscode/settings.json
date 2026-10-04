@@ -3,5 +3,7 @@
     "java.import.gradle.enabled": false,
     "java.import.exclusions": [
         "**/android/**"
-    ]
+    ],
+    "deno.enable": true,
+    "deno.enablePaths": ["supabase/functions"]
 }
