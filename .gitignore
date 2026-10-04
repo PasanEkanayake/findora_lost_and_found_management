@@ -52,3 +52,4 @@ app.*.map.json
 /ai_service/.venv
 android/app/google-services.json
 android/app/src/main/AndroidManifest.xml
+findora-91c1b-firebase-adminsdk-fbsvc-19b42e6399.json
