@@ -53,9 +53,16 @@ class ItemFeedScreen extends ConsumerStatefulWidget {
   ConsumerState<ItemFeedScreen> createState() => _ItemFeedScreenState();
 }
 
+/// Home feed's lost/found switch. Applied to the already-fetched list
+/// rather than sent to the server: the hero header's "N lost · N found"
+/// counts need the *unfiltered* list, and switching this way is instant
+/// (no reload) since nothing has to be refetched.
+enum _TypeFilter { all, lost, found }
+
 class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
   String? _selectedCategoryId;
   String _query = '';
+  _TypeFilter _typeFilter = _TypeFilter.all;
   Timer? _debounce;
 
   @override
@@ -162,7 +169,14 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                           fillColor: theme.colorScheme.surfaceContainerHighest,
                         ),
                       ),
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 12),
+                      _TypeSwitch(
+                        selected: _typeFilter,
+                        lostCount: lostCount,
+                        foundCount: foundCount,
+                        onChanged: (value) => setState(() => _typeFilter = value),
+                      ),
+                      const SizedBox(height: 12),
                       SizedBox(
                         height: 36,
                         child: categoriesAsync.when(
@@ -191,15 +205,23 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                   body: 'Check your connection and pull down to try again.',
                 ),
               ),
-              data: (items) {
+              data: (allItems) {
+                final items = switch (_typeFilter) {
+                  _TypeFilter.all => allItems,
+                  _TypeFilter.lost => allItems.where((i) => i.isLost).toList(),
+                  _TypeFilter.found => allItems.where((i) => !i.isLost).toList(),
+                };
                 if (items.isEmpty) {
+                  final hasFilter = _selectedCategoryId != null ||
+                      _query.isNotEmpty ||
+                      _typeFilter != _TypeFilter.all;
                   return SliverFillRemaining(
                     child: _FeedMessage(
                       icon: Icons.search_off,
                       title: 'Nothing here yet',
-                      body: (_selectedCategoryId == null && _query.isEmpty)
-                          ? 'Be the first to report a lost or found item.'
-                          : 'Try a different search or category.',
+                      body: hasFilter
+                          ? 'Try a different search, category, or switch back to All.'
+                          : 'Be the first to report a lost or found item.',
                     ),
                   );
                 }
@@ -308,7 +330,7 @@ class _HeroHeader extends StatelessWidget {
                   Text(
                     lostCount == null
                         ? "Let's find what's missing."
-                        : '$lostCount lost · $foundCount found nearby right now',
+                        : '$lostCount LOST · $foundCount FOUND items listed right now',
                     style: theme.textTheme.bodyMedium
                         ?.copyWith(color: Colors.white.withValues(alpha: 0.9)),
                   ),
@@ -326,6 +348,89 @@ class _HeroHeader extends StatelessWidget {
         height: size,
         decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       );
+}
+
+/// All / Lost / Found switch — three equal-width, 48dp-tall segments so it's
+/// easy to hit. Built by hand rather than with Material's SegmentedButton
+/// because that widget sizes itself to its labels, and this one is meant to
+/// span the full width of the feed.
+class _TypeSwitch extends StatelessWidget {
+  const _TypeSwitch({
+    required this.selected,
+    required this.lostCount,
+    required this.foundCount,
+    required this.onChanged,
+  });
+
+  final _TypeFilter selected;
+  final int? lostCount;
+  final int? foundCount;
+  final ValueChanged<_TypeFilter> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final total = (lostCount != null && foundCount != null) ? lostCount! + foundCount! : null;
+
+    Widget segment(_TypeFilter value, String label, IconData icon, int? count) {
+      final isSelected = selected == value;
+      final foreground =
+          isSelected ? theme.colorScheme.onPrimary : theme.colorScheme.onSurfaceVariant;
+      return Expanded(
+        child: Semantics(
+          button: true,
+          selected: isSelected,
+          label: count == null ? label : '$label, $count posts',
+          child: Material(
+            color: isSelected ? theme.colorScheme.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => onChanged(value),
+              child: SizedBox(
+                height: 44,
+                child: Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(icon, size: 18, color: foreground),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          count == null ? label : '$label ($count)',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelLarge?.copyWith(
+                            color: foreground,
+                            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          segment(_TypeFilter.all, 'All', Icons.apps_rounded, total),
+          segment(_TypeFilter.lost, 'Lost', Icons.search, lostCount),
+          segment(_TypeFilter.found, 'Found', Icons.volunteer_activism_outlined, foundCount),
+        ],
+      ),
+    );
+  }
 }
 
 class _CategoryChipRow extends StatelessWidget {
