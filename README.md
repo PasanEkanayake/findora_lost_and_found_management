@@ -85,6 +85,13 @@ genuinely optional — see their own rows below).
 | Home feed: Lost / Found filter | A three-way **All / Lost / Found** switch under the search box, each with a live count. Applied client-side (instant, no reload) alongside the existing category and search filters | None |
 | User manual, Privacy policy, Safety guidelines | Three full documents under Profile, plus **Help & support** now links to all three and groups its FAQs by topic. Content lives in one place (`lib/features/profile/document/document_content.dart`) with matching Markdown copies in `docs/` for publishing (e.g. an app-store privacy-policy URL) | None |
 
+| Maps back on Google | The app briefly ran on OpenStreetMap/`flutter_map` with no API key needed; now that you have a working Google Maps key, it's back to `google_maps_flutter` + `geocoding` as before (see **A5.1**) | None — but run `flutter pub get` (dependencies changed back) |
+| Item detail: errors are now diagnosable | "Couldn't load this item" used to hide the actual error. It now shows the real message, logs the full error and stack trace, and adds a **Try again** button. If a post won't load, this is now the first thing to check | None |
+
+| Alerts tab + unread badges | A new **Alerts** tab (between Chats and Profile) lists new matches, match confirmations, claim filed/approved/rejected, items returned, and new ratings — tap one to jump straight to it, or **Mark all read**. It and the **Chats** tab now show a number badge in the bottom nav when there's something unread. Ordinary chat messages aren't included in Alerts on purpose — the Chats badge already covers those; see `supabase/14_notifications.sql`'s header | **Required:** run `supabase/14_notifications.sql` |
+
+| Real push notifications (code ready, needs your setup) | The missing half of push notifications is now written: `supabase/functions/send-push-notification/index.ts` sends a real push whenever a notification is created, and the app now navigates correctly when one is tapped, cold start included. This needs your own Firebase service account and a few `supabase` CLI commands — it can't be finished from here. See **"Sending real push notifications"** below | None (no new migration — it sends off the existing `notifications` table) |
+
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
 `05` and `08` are required, `06`/`07` are optional but harmless to run
 anyway:
@@ -95,10 +102,11 @@ in — see its header comment and "Email confirmation flow" below),
 `10_open_matching_and_time.sql`,
 `11_realtime_and_matching_fixes.sql` (live chat + AI matching fixes —
 required), `12_text_matching.sql` (matching by title/description,
-independent of photos — required), and finally
+independent of photos — required),
 `13_returned_items_and_ratings.sql` (returned posts become private to
 their two owners, plus the Returned items and Ratings & reviews sections
-— required).
+— required), and finally `14_notifications.sql` (the Alerts tab —
+required).
 
 ---
 
@@ -248,12 +256,12 @@ warnings about Chrome or Xcode if you don't plan to build for web/iOS.
    "Email confirmation flow" further down.
 7c. Then `08_soft_delete.sql`, `09_account_deletion.sql`,
    `10_open_matching_and_time.sql`, `11_realtime_and_matching_fixes.sql`,
-   `12_text_matching.sql` and `13_returned_items_and_ratings.sql`, in that
-   order. Each is safe to re-run. `08`, `10`, `11`, `12` and `13` are
-   needed for the current app code to work properly (see the top of this
-   file). After `13`, run `select public.rematch_all_text();` isn't needed
-   again, but if you have posts that were already returned before it, see
-   that migration's header for the one-time backfill it runs automatically.
+   `12_text_matching.sql`, `13_returned_items_and_ratings.sql` and
+   `14_notifications.sql`, in that order. Each is safe to re-run. `08`,
+   `10`, `11`, `12`, `13` and `14` are needed for the current app code to
+   work properly (see the top of this file). `13` runs a one-time backfill
+   automatically for posts already returned before it; see that
+   migration's header.
 8. In the left sidebar, click the gear icon (**Project Settings**) →
    **API Keys**. Copy two values, you'll need them in the next step:
    - **Project URL** (looks like `https://xxxxx.supabase.co`)
@@ -1317,7 +1325,9 @@ just renders a blank/grey map until one is added.
   `_TypeSwitch` in `item_feed_screen.dart`.
 - The map toggle swaps the list for `ItemsMapView`, centering on the
   device's location and plotting open items within 5km via `nearby_items()`
-  — red pins for lost, green for found.
+  — red pins for lost, green for found. Tapping a marker shows Google
+  Maps' own info window (title + Lost/Found); it doesn't navigate
+  anywhere, matching how this always behaved.
 - `nearby_items()` returns plain `latitude`/`longitude` doubles (via
   `st_y`/`st_x`) rather than a raw PostGIS geography value, which doesn't
   serialize predictably over PostgREST.
@@ -1351,50 +1361,65 @@ both posts in the pair leave every shared list:
   ones. A pair that can't be paired this way still appears in Returned
   items for its owner, just without the other side.
 
-## Open-source alternative to Google Maps / geocoding
+## The Alerts tab and unread badges (Phase 9)
 
-The app currently uses `google_maps_flutter` for the map (item detail
-preview, `ItemsMapView`, `LocationPickerScreen`) and the `geocoding`
-package for turning coordinates into an address label — the latter calls
-through to each OS's own geocoder, which on Android is backed by Google.
-Both need a Google Maps API key (see "Google Maps setup" below).
-
-Yes, there's a genuinely open-source path, built on
-[OpenStreetMap](https://www.openstreetmap.org) data:
-
-- **Map rendering**: [`flutter_map`](https://pub.dev/packages/flutter_map)
-  (BSD-3, pure Dart/Flutter, no API key) draws OSM tiles instead of Google's.
-  It's a drop-in replacement for the map *widget* — markers, tap-to-select,
-  a draggable center pin — but not for `google_maps_flutter`'s API
-  directly, so `ItemsMapView` and `LocationPickerScreen` would need
-  rewriting against its `FlutterMap`/`TileLayer`/`Marker` types.
-- **Geocoding** (coordinates → address label):
-  [Nominatim](https://nominatim.org), OpenStreetMap's own search engine,
-  free with no key. Its public instance is rate-limited to **1 request/
-  second**, requires a descriptive `User-Agent` identifying your app, and
-  forbids bulk/autocomplete use — fine for "reverse-geocode the pin the
-  person just dropped" (one request per post), not for something calling
-  it in a loop.
-
-What this does **not** remove: `google_maps_flutter` is also how the
-Report-item flow gets the device's *current* location in the first place
-— that's the `geolocator` package (already open source, MIT, no Google
-dependency) reading the OS location API directly, unrelated to which map
-you draw afterward.
-
-Two things worth knowing before switching:
-- **The OSM public tile server (`tile.openstreetmap.org`) is not meant for
-  production apps** — its own documentation says as much. For anything
-  beyond development, either self-host tiles or use a free-tier host
-  built for this (MapTiler, Stadia Maps, Thunderforest, or Geoapify), and
-  set that host's URL as `flutter_map`'s `TileLayer.urlTemplate`.
-- **Attribution is required** wherever the map is shown — `flutter_map`
-  has a built-in `RichAttributionWidget` for this, and Nominatim results
-  need an OpenStreetMap credit too.
-
-This is a genuine swap of a working system, not a small patch, so I
-haven't made it without being asked — happy to build it as its own
-change if you'd like the app running fully key-free.
+- **`supabase/14_notifications.sql`** adds a `notifications` table
+  (RLS: a user can read and mark-read only their own rows; nothing can
+  INSERT into it directly — see below) and a single helper,
+  `create_notification()`, that every trigger writes through. Six
+  triggers/functions call it, one per event, each firing from exactly one
+  place so an event can't be double-notified or missed:
+  - a genuinely **new** match → `upsert_match_score()`'s insert branch
+    (12_text_matching.sql, redefined here), notifying both owners —
+    re-scoring an *existing* match (its enrich branch) does not notify.
+  - a match's status becomes **confirmed** → new trigger
+    `matches_notify_confirmed`, notifying whichever owner didn't just
+    tap "This is it!" (`MatchCard.updateStatus` is a plain client
+    `update`, not an RPC, so a trigger is the only hook available).
+  - a **claim is filed** → new trigger `claims_notify_filed`, notifying
+    the found item's owner.
+  - a claim is **approved/rejected** → new trigger
+    `claims_notify_decision`, notifying the claimant.
+  - an item is marked **returned** → `mark_returned()` (13_returned_items_
+    and_ratings.sql, redefined here), notifying both owners.
+  - a **new rating** → new trigger `ratings_notify_new`, notifying the
+    person rated.
+  - **Chat messages are deliberately not included** — seeing every
+    message as a notification row would make this the single
+    highest-write table in the app for no real benefit, and would bury
+    the less-frequent events above. The Chats tab's own badge (next
+    point) already covers messages.
+- **Reading is a plain `select`/`update`**, not an RPC — the RLS policies
+  above are enough on their own (`NotificationsRepository`,
+  `lib/features/notifications/data/`). A SECURITY DEFINER function is
+  only needed for *writing*, which the client never does directly.
+- **The Chats badge** (`unreadChatsCountProvider`,
+  `lib/core/providers/unread_counts_provider.dart`) is a derived
+  provider, not its own query — it sums `unreadCount` across whatever
+  `conversationsProvider`/`contactThreadsProvider` already returned, so it
+  can never disagree with what the Chats list itself shows.
+- **Keeping both badges live while on a different tab**: `MainShell`
+  became a `ConsumerStatefulWidget` with one `Timer.periodic` (15s) that
+  invalidates `matchesProvider`/`conversationsProvider`/
+  `contactThreadsProvider`/`notificationsProvider` together — all four
+  tabs stay mounted offscreen via `IndexedStack` already (see that
+  class's doc), so one shell-level timer covers all of them rather than
+  each tab polling on its own. Opening a tab still invalidates its own
+  provider immediately too, same as before, so switching tabs doesn't
+  have to wait for the timer's next tick.
+- **The bottom nav tab is labelled "Alerts"**, not "Notifications" — five
+  short labels fit a `NavigationBar` more comfortably than four, and it
+  avoids reading as a duplicate of the existing **Notification
+  settings** screen (the push-permission toggle, unchanged, still under
+  Profile). The screen's own title is "Notifications"; only the nav
+  label itself is shortened. Change `main_shell.dart`'s `label: 'Alerts'`
+  if you'd rather it matched exactly.
+- Not done here, and worth knowing: this is **polling, not push** —
+  `notifications` isn't in the `supabase_realtime` publication, unlike
+  `messages`/`contact_messages` (11_realtime_and_matching_fixes.sql).
+  Badges update within 15 seconds, not instantly. Adding it to that
+  publication and subscribing the same way ChatScreen does for messages
+  would be the natural upgrade if instant matters more than simplicity.
 
 ## Firebase setup for push notifications (Phase 7)
 
@@ -1429,12 +1454,74 @@ foreground messages as local notifications. Skip this and the app still
 runs fine — it's wrapped in a try/catch specifically so a missing
 Firebase project degrades to "no push notifications" rather than a crash.
 
-**What's still missing, honestly**: nothing in this codebase actually
-*sends* a push notification when a match or message happens. That needs
-a server-side piece — a Supabase Edge Function (calling the FCM HTTP v1
-API) triggered by a Database Webhook on inserts into `matches`/`messages`
-— which needs a Firebase service account key, a real secret that has to
-be set up against your own project.
+## Sending real push notifications (Phase 9)
+
+Everything above gets the app *ready* to receive a push — permission,
+token storage, foreground display — but nothing sends one yet. That
+needed a server-side piece with a real secret this sandbox has no way to
+hold, so it's the one part of this app that can't be finished without
+your own hands on your own Firebase project. The code for it is written
+and waiting: `supabase/functions/send-push-notification/index.ts`.
+
+**What it does**: whenever a row lands in `notifications`
+(supabase/14_notifications.sql — a new match, a match confirmed, a claim
+filed or decided, an item returned, a new rating), it looks up that
+person's device token, signs a Google OAuth2 token from a Firebase
+service account (plain Web Crypto, deliberately not the `firebase-admin`
+npm package — that package has a history of flaky deploys on Supabase's
+Deno runtime), and sends the push via the FCM HTTP v1 API. Android shows
+it automatically even with the app fully closed, no extra app code
+needed for that part. Tapping it opens the same place tapping the Alerts
+entry would (`lib/core/notifications/push_notifications.dart` already
+has the tap-handling side of this wired up).
+
+**Chat messages aren't included** — same reasoning as the Alerts tab
+itself (see `14_notifications.sql`'s header): a push per message would
+be far too frequent to be welcome, and messages already have their own
+unread badge. If you want pushes for new messages specifically, that's a
+genuinely different, higher-volume feature to design (likely batching
+or muting rules), not a small addition to this one.
+
+### Setup
+
+1. **Firebase service account.** Firebase Console → Project Settings →
+   Service Accounts → **Generate new private key**. This downloads a
+   JSON file — treat it like a password; never commit it or share it.
+2. **Install the Supabase CLI** if you haven't (`npm install -g
+   supabase`, or see supabase.com/docs/guides/local-development/cli).
+   Log in and link it to your project:
+   ```bash
+   supabase login
+   supabase link --project-ref YOUR_PROJECT_REF
+   ```
+   (The project ref is in your Supabase dashboard URL.)
+3. **Set the function's secrets** — run from the project root, with the
+   downloaded JSON file's actual path, and a password of your own
+   choosing for the webhook secret:
+   ```bash
+   supabase secrets set FIREBASE_SERVICE_ACCOUNT_JSON="$(cat path/to/your-service-account.json)"
+   supabase secrets set WEBHOOK_SECRET="choose-a-long-random-string-here"
+   ```
+   `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` don't need setting —
+   every Edge Function gets those two automatically.
+4. **Deploy the function:**
+   ```bash
+   supabase functions deploy send-push-notification
+   ```
+5. **Wire up the Database Webhook** — Supabase Dashboard → Database →
+   Webhooks → **Create a new hook**:
+   - Table: `notifications`. Event: `Insert` only.
+   - Type: **Supabase Edge Functions**. Function: `send-push-notification`.
+   - Under HTTP headers, add one: `x-webhook-secret` → the exact same
+     string you set as `WEBHOOK_SECRET` in step 3. This is what stops
+     anyone who finds the function's URL from sending themselves
+     arbitrary pushes — the function checks it before doing anything else.
+6. **Test it**: sign in on a real device (not an emulator without Google
+   Play services — FCM needs it) so a token gets saved, then do
+   something that creates a notification (post two matching items from
+   different accounts) and the push should arrive within a few seconds,
+   app open or fully closed. If it doesn't, check the function's logs:
+   Dashboard → Edge Functions → `send-push-notification` → Logs.
 
 ## In-app chat (Phase 7)
 
