@@ -6,6 +6,7 @@ import 'category_model.dart';
 import 'item_model.dart';
 import 'items_repository.dart';
 import 'nearby_item_model.dart';
+import 'returned_item_model.dart';
 
 final itemsRepositoryProvider = Provider<ItemsRepository>((ref) {
   return const ItemsRepository();
@@ -81,6 +82,13 @@ final nearbyItemsProvider =
         latitude: center.latitude,
         longitude: center.longitude,
       );
+});
+
+/// The profile's "Returned items" section. autoDispose, so it refetches
+/// each time the screen is opened; also invalidated right after a return
+/// is recorded (see ChatScreen's "Mark as returned").
+final returnedItemsProvider = FutureProvider.autoDispose<List<ReturnedItemModel>>((ref) {
+  return ref.watch(itemsRepositoryProvider).fetchMyReturnedItems();
 });
 
 final itemDetailProvider = FutureProvider.autoDispose.family<ItemModel, String>((ref, id) {

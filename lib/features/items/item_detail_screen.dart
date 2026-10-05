@@ -11,6 +11,7 @@ import '../contact/data/contact_providers.dart';
 import '../matches/data/matches_providers.dart';
 import '../../core/providers/auth_providers.dart';
 import '../../core/widgets/confirm_dialog.dart';
+import '../../core/widgets/item_photo.dart';
 import '../../core/widgets/new_badge.dart';
 import 'data/item_model.dart';
 import 'data/items_providers.dart';
@@ -44,7 +45,62 @@ class ItemDetailScreen extends ConsumerWidget {
       ),
       body: itemAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (_, __) => const Center(child: Text("Couldn't load this item.")),
+        error: (error, stackTrace) {
+          // The previous version of this screen showed only a static
+          // "Couldn't load this item." with no way to retry and no way to
+          // tell *why* — every failure looked identical, whether the item
+          // genuinely doesn't exist, isn't visible any more (e.g. it was
+          // returned — see supabase/13_returned_items_and_ratings.sql — and
+          // this account isn't one of its two owners), or something else
+          // entirely broke. Logging the real error and showing it on
+          // screen, plus a retry button, turns "it's just broken" into
+          // something that can actually be diagnosed.
+          debugPrint('ItemDetailScreen($itemId) failed to load: $error\n$stackTrace');
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.error_outline,
+                      size: 40, color: Theme.of(context).colorScheme.error),
+                  const SizedBox(height: 12),
+                  const Text(
+                    "Couldn't load this item.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    "This can happen if the post was removed, or if it's no "
+                    'longer visible to your account (for example, once an '
+                    'item is returned it stays visible only to the two '
+                    'people involved).',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 12),
+                  SelectableText(
+                    '$error',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                          fontFamily: 'monospace',
+                        ),
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton(
+                    onPressed: () => ref.invalidate(itemDetailProvider(itemId)),
+                    child: const Text('Try again'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
         data: (item) => _ItemDetailBody(item: item),
       ),
       bottomNavigationBar: itemAsync.maybeWhen(
@@ -222,6 +278,30 @@ class _ContactBar extends ConsumerWidget {
     final myId = ref.watch(currentUserProvider)?.id;
     if (myId == null || item.userId == myId) return const SizedBox.shrink();
 
+    // A returned post is only reachable by its two owners (anyone else is
+    // blocked by row-level security), and the exchange is finished — so there
+    // is nothing left to contact anyone about.
+    if (item.status == 'resolved') {
+      final theme = Theme.of(context);
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              Icon(Icons.task_alt, color: theme.colorScheme.tertiary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'This item has been returned. Find your chat under Profile → Returned items.',
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final matchesAsync = ref.watch(matchesProvider);
 
     return SafeArea(
@@ -324,11 +404,9 @@ class _ItemDetailBodyState extends State<_ItemDetailBody> {
       padding: EdgeInsets.zero,
       children: [
         if (item.imageUrls.isEmpty)
-          Container(
+          const SizedBox(
             height: 280,
-            color: theme.colorScheme.surfaceContainerHighest,
-            child: Icon(Icons.image_outlined,
-                size: 48, color: theme.colorScheme.onSurfaceVariant),
+            child: ItemPhotoPlaceholder(showLabel: true),
           )
         else
           Stack(
@@ -513,11 +591,91 @@ class _ItemDetailBodyState extends State<_ItemDetailBody> {
                   const SizedBox(height: 16),
                   _LocationPreview(itemId: item.id),
                 ],
+                const SizedBox(height: 16),
+                _PossibleMatchesSection(item: item),
               ],
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Entry point into [ItemMatchesScreen] for this specific post — a tappable
+/// row rather than a whole card, so it reads as "one more thing about this
+/// post" alongside the detail rows above it, not as a competing section.
+///
+/// Shown for the post's own owner unconditionally (checking is always
+/// useful, even at zero matches — the destination screen explains why).
+/// For anyone else, shown only once this post is already matched against
+/// one of *their* own posts — that's the only case where "possible
+/// matches" means anything from a non-owner's point of view; otherwise the
+/// bottom contact bar is the relevant action, not this.
+class _PossibleMatchesSection extends ConsumerWidget {
+  const _PossibleMatchesSection({required this.item});
+
+  final ItemModel item;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final myId = ref.watch(currentUserProvider)?.id;
+    if (myId == null) return const SizedBox.shrink();
+    // A returned post is finished — matching no longer applies to it.
+    if (item.status == 'resolved') return const SizedBox.shrink();
+
+    final isOwner = item.userId == myId;
+    final matchesAsync = ref.watch(matchesProvider);
+
+    return matchesAsync.when(
+      // A brief loading flash isn't worth showing its own spinner for —
+      // the section just appears a moment after the rest of the page.
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (matches) {
+        final relevant =
+            matches.where((m) => m.myItemId == item.id || m.matchedItemId == item.id).toList();
+        if (!isOwner && relevant.isEmpty) return const SizedBox.shrink();
+
+        final theme = Theme.of(context);
+        final subtitle = relevant.isEmpty
+            ? (isOwner ? 'None yet — the AI checks automatically' : null)
+            : '${relevant.length} possible match${relevant.length == 1 ? '' : 'es'}'
+                '${isOwner ? '' : ' with one of your posts'}';
+
+        return InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => context.push('/item/${item.id}/matches', extra: item.title),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.auto_awesome, size: 20, color: theme.colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('View possible matches', style: theme.textTheme.titleSmall),
+                      if (subtitle != null)
+                        Text(
+                          subtitle,
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -14,6 +14,7 @@ class MatchModel {
     required this.status,
     required this.createdAt,
     this.matchedItemImageUrl,
+    this.myItemImageUrl,
     this.imageSimilarity,
     this.textSimilarity,
     this.distanceMeters,
@@ -28,6 +29,11 @@ class MatchModel {
   final String matchedItemType; // 'lost' | 'found'
   final String matchedItemUserId;
   final String? matchedItemImageUrl;
+
+  /// The caller's own item's first photo. Not part of `my_matches()`'s
+  /// output — MatchesRepository looks it up separately so the match card can
+  /// show both items side by side. Null if the item has no photo.
+  final String? myItemImageUrl;
 
   /// The blended score shown as "XX% match" — see combined_match_score()
   /// in supabase/10_open_matching_and_time.sql for exactly how it's
@@ -54,7 +60,11 @@ class MatchModel {
 
   bool get matchedItemIsLost => matchedItemType == 'lost';
 
-  factory MatchModel.fromMap(Map<String, dynamic> map) {
+  /// Matches only ever pair a lost item with a found one, so my item is
+  /// always the opposite type of the matched one.
+  bool get myItemIsLost => !matchedItemIsLost;
+
+  factory MatchModel.fromMap(Map<String, dynamic> map, {String? myItemImageUrl}) {
     return MatchModel(
       matchId: map['match_id'] as String,
       myItemId: map['my_item_id'] as String,
@@ -64,6 +74,7 @@ class MatchModel {
       matchedItemType: map['matched_item_type'] as String,
       matchedItemUserId: map['matched_item_user_id'] as String,
       matchedItemImageUrl: map['matched_item_image_url'] as String?,
+      myItemImageUrl: myItemImageUrl,
       similarityScore: (map['similarity_score'] as num).toDouble(),
       imageSimilarity: (map['image_similarity'] as num?)?.toDouble(),
       textSimilarity: (map['text_similarity'] as num?)?.toDouble(),

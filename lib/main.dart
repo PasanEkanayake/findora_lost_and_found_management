@@ -47,6 +47,17 @@ class FindoraApp extends ConsumerWidget {
     final router = ref.watch(appRouterProvider);
     final themeMode = ref.watch(themeModeProvider);
 
+    // A notification that cold-started the app (see
+    // push_notifications.dart's getInitialMessage handling) left a route
+    // waiting for exactly this moment — the router above now exists, so
+    // it's finally safe to act on it. Scheduled for after this frame
+    // rather than during build, since navigating is a side effect and
+    // the splash/redirect flow needs to run its own first frame normally.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pendingRoute = consumePendingNotificationRoute();
+      if (pendingRoute != null) router.push(pendingRoute);
+    });
+
     // Re-registers the push token on every sign-in, not just at cold
     // start — a token fetched before login has nobody to be saved against.
     ref.listen(currentUserProvider, (previous, next) {

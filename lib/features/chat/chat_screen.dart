@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import '../../core/supabase/supabase_client.dart';
 import '../items/data/claims_providers.dart';
+import '../items/data/items_providers.dart';
+import '../matches/data/matches_providers.dart';
 import 'data/message_model.dart';
 import 'data/messages_providers.dart';
 
@@ -47,15 +52,50 @@ class ChatScreen extends ConsumerStatefulWidget {
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _controller = TextEditingController();
+  Timer? _syncTimer;
+  String? _lastMarkedReadId;
+
+  /// Recomputed on demand rather than stored, since it only depends on
+  /// [widget.args] (fixed for this screen's lifetime) and the signed-in
+  /// user's id (which doesn't change mid-session either) — cheap enough
+  /// not to bother caching, and it's needed both in [build] and in the
+  /// periodic timer below.
+  ChatLifecycleParams get _lifecycleParams {
+    final myId = supabase.auth.currentUser?.id;
+    return ChatLifecycleParams(
+      foundItemId: widget.args.foundItemId,
+      claimantId: widget.args.iAmClaimant ? (myId ?? '') : widget.args.otherUserId,
+      myId: myId ?? '',
+    );
+  }
 
   @override
   void initState() {
     super.initState();
-    ref.read(messagesRepositoryProvider).markConversationRead(widget.args.matchId);
+    final repo = ref.read(messagesRepositoryProvider);
+    repo.markConversationRead(widget.args.matchId);
+    // The message provider stays alive between visits (see
+    // messagesStreamProvider), so anything sent while this screen was
+    // closed is pulled in straight away instead of after the first tick.
+    repo.syncNow(widget.args.matchId);
+    // One timer covers both: messages have a realtime channel as their
+    // primary path (this is only its safety net — see
+    // MessagesRepository.syncNow). chatLifecycleProvider has no push
+    // channel of its own at all (see its doc), so this timer is the
+    // *only* thing that lets the claim/status banner below update without
+    // the person leaving and reopening the chat — the fetch that runs the
+    // moment this screen is first built (build() watches it below) covers
+    // opening the chat, but not a change the *other* person makes while
+    // both of you already have it open.
+    _syncTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      repo.syncNow(widget.args.matchId);
+      if (mounted) ref.invalidate(chatLifecycleProvider(_lifecycleParams));
+    });
   }
 
   @override
   void dispose() {
+    _syncTimer?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -85,20 +125,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final theme = Theme.of(context);
     final myId = supabase.auth.currentUser?.id;
     final messagesAsync = ref.watch(messagesStreamProvider(widget.args.matchId));
-    final lifecycleParams = ChatLifecycleParams(
-      foundItemId: widget.args.foundItemId,
-      claimantId: widget.args.iAmClaimant ? (myId ?? '') : widget.args.otherUserId,
-      myId: myId ?? '',
-    );
+
+    // See ContactChatScreen: mark a message read as soon as it arrives
+    // while this screen is open, not only when it's next reopened.
+    ref.listen(messagesStreamProvider(widget.args.matchId), (previous, next) {
+      final messages = next.value;
+      if (messages == null || messages.isEmpty) return;
+      final latest = messages.last;
+      if (latest.senderId != myId && latest.id != _lastMarkedReadId) {
+        _lastMarkedReadId = latest.id;
+        ref.read(messagesRepositoryProvider).markConversationRead(widget.args.matchId);
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(title: Text(widget.args.otherItemTitle)),
       body: Column(
         children: [
-          ref.watch(chatLifecycleProvider(lifecycleParams)).when(
+          ref.watch(chatLifecycleProvider(_lifecycleParams)).when(
                 loading: () => const SizedBox.shrink(),
                 error: (_, __) => const SizedBox.shrink(),
-                data: (status) => _LifecycleBanner(args: widget.args, status: status),
+                data: (status) => _LifecycleBanner(
+                  args: widget.args,
+                  status: status,
+                  lifecycleParams: _lifecycleParams,
+                ),
               ),
           Expanded(
             child: messagesAsync.when(
@@ -169,35 +220,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 /// shows depends on both [ChatScreenArgs.iAmClaimant] and the current
 /// [ChatLifecycleStatus] — see the inline comments below for each branch.
 class _LifecycleBanner extends ConsumerWidget {
-  const _LifecycleBanner({required this.args, required this.status});
+  const _LifecycleBanner({
+    required this.args,
+    required this.status,
+    required this.lifecycleParams,
+  });
 
   final ChatScreenArgs args;
   final ChatLifecycleStatus status;
 
+  /// Identifies exactly which [chatLifecycleProvider] instance this banner
+  /// is showing, so its actions below can invalidate *that one* instead of
+  /// the whole family — invalidating the bare provider would also refetch
+  /// every other chat screen's claim status open elsewhere in the app for
+  /// no reason.
+  final ChatLifecycleParams lifecycleParams;
+
   Future<void> _fileClaim(BuildContext context, WidgetRef ref) async {
-    final controller = TextEditingController();
     final answer = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('File a claim'),
-        content: TextField(
-          controller: controller,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: 'Describe a unique detail that proves this is yours',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
-            child: const Text('Submit'),
-          ),
-        ],
-      ),
+      builder: (dialogContext) => const _ClaimAnswerDialog(),
     );
     if (answer == null || answer.isEmpty || !context.mounted) return;
 
@@ -205,7 +247,8 @@ class _LifecycleBanner extends ConsumerWidget {
       await ref
           .read(claimsRepositoryProvider)
           .fileClaim(itemId: args.foundItemId, verificationAnswer: answer);
-      ref.invalidate(chatLifecycleProvider);
+      if (!context.mounted) return;
+      ref.invalidate(chatLifecycleProvider(lifecycleParams));
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
@@ -218,7 +261,8 @@ class _LifecycleBanner extends ConsumerWidget {
       await ref
           .read(claimsRepositoryProvider)
           .updateClaimStatus(claimId: status.claim!.id, status: newStatus);
-      ref.invalidate(chatLifecycleProvider);
+      if (!context.mounted) return;
+      ref.invalidate(chatLifecycleProvider(lifecycleParams));
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
@@ -227,9 +271,35 @@ class _LifecycleBanner extends ConsumerWidget {
   }
 
   Future<void> _markReturned(BuildContext context, WidgetRef ref) async {
+    // Only the finder ever gets this button, so the lost post is the one
+    // this chat's *other* person owns — but derive it from the args rather
+    // than assuming, the same way [ChatScreenArgs.foundItemId] does.
+    final lostItemId = args.iAmClaimant ? args.myItemId : args.matchedItemId;
+
     try {
-      await ref.read(claimsRepositoryProvider).markItemResolved(args.foundItemId);
-      ref.invalidate(chatLifecycleProvider);
+      await ref
+          .read(claimsRepositoryProvider)
+          .markReturned(foundItemId: args.foundItemId, lostItemId: lostItemId);
+      if (!context.mounted) return;
+      ref.invalidate(chatLifecycleProvider(lifecycleParams));
+      // Both posts just left every list — refresh everything that shows
+      // them so nothing lingers until the next manual refresh.
+      ref.invalidate(itemsFeedProvider);
+      ref.invalidate(myItemsProvider);
+      ref.invalidate(matchesProvider);
+      ref.invalidate(returnedItemsProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Marked as returned. Both posts have moved to Profile → Returned items.',
+          ),
+        ),
+      );
+    } on PostgrestException catch (e) {
+      // The database re-checks the return and explains itself in plain
+      // language (e.g. "Approve the other person's claim first") — show that.
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
@@ -238,60 +308,22 @@ class _LifecycleBanner extends ConsumerWidget {
   }
 
   Future<void> _rate(BuildContext context, WidgetRef ref) async {
-    var stars = 5;
-    final commentController = TextEditingController();
-
-    final confirmed = await showDialog<bool>(
+    final result = await showDialog<({int stars, String comment})>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setState) => AlertDialog(
-          title: const Text('How did it go?'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  for (var i = 1; i <= 5; i++)
-                    IconButton(
-                      onPressed: () => setState(() => stars = i),
-                      tooltip: '$i star${i == 1 ? '' : 's'}',
-                      icon: Icon(
-                        i <= stars ? Icons.star_rounded : Icons.star_border_rounded,
-                        color: Theme.of(dialogContext).colorScheme.secondary,
-                      ),
-                    ),
-                ],
-              ),
-              TextField(
-                controller: commentController,
-                decoration: const InputDecoration(hintText: 'Add a comment (optional)'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Skip'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Submit'),
-            ),
-          ],
-        ),
-      ),
+      builder: (dialogContext) => const _RatingDialog(),
     );
-    if (confirmed != true || !context.mounted) return;
+    if (result == null || !context.mounted) return;
+    final (:stars, :comment) = result;
 
     try {
       await ref.read(claimsRepositoryProvider).submitRating(
             itemId: args.foundItemId,
             rateeId: args.otherUserId,
             stars: stars,
-            comment: commentController.text.trim().isEmpty ? null : commentController.text.trim(),
+            comment: comment.isEmpty ? null : comment,
           );
-      ref.invalidate(chatLifecycleProvider);
+      if (!context.mounted) return;
+      ref.invalidate(chatLifecycleProvider(lifecycleParams));
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
@@ -305,13 +337,22 @@ class _LifecycleBanner extends ConsumerWidget {
     final claim = status.claim;
 
     String message;
+    // A single button ("File a claim", "Rate", ...) is left-aligned and
+    // sized to its label — see the Align below for why. Reject/Approve is
+    // its own separate slot, [pairedAction], because a *pair* of these
+    // buttons needs the opposite treatment: full width, matching
+    // MatchCard's Confirm/Dismiss row, both for a bigger and more
+    // accessible tap target and because Align's unbounded width doesn't
+    // give two of them anywhere finite to size themselves against (see
+    // that fix's history in git blame if this ever regresses).
     Widget? action;
+    Widget? pairedAction;
 
     if (status.itemStatus == 'resolved') {
       if (status.iHaveRated) {
-        message = 'Item marked as returned ✓';
+        message = 'Item marked as returned ✓ — find it in Profile → Returned items.';
       } else {
-        message = 'Marked as returned — how did it go?';
+        message = 'Marked as returned — how did it go? Both posts are now private to the two of you.';
         action = FilledButton(
           onPressed: () => _rate(context, ref),
           child: const Text('Rate'),
@@ -332,17 +373,20 @@ class _LifecycleBanner extends ConsumerWidget {
         message = 'Claim submitted — waiting for review.';
       } else {
         message = 'Claim: "${claim.verificationAnswer}"';
-        action = Row(
-          mainAxisSize: MainAxisSize.min,
+        pairedAction = Row(
           children: [
-            OutlinedButton(
-              onPressed: () => _decide(context, ref, 'rejected'),
-              child: const Text('Reject'),
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => _decide(context, ref, 'rejected'),
+                child: const Text('Reject'),
+              ),
             ),
             const SizedBox(width: 8),
-            FilledButton(
-              onPressed: () => _decide(context, ref, 'approved'),
-              child: const Text('Approve'),
+            Expanded(
+              child: FilledButton(
+                onPressed: () => _decide(context, ref, 'approved'),
+                child: const Text('Approve'),
+              ),
             ),
           ],
         );
@@ -379,8 +423,124 @@ class _LifecycleBanner extends ConsumerWidget {
             const SizedBox(height: 8),
             Align(alignment: Alignment.centerLeft, child: action),
           ],
+          if (pairedAction != null) ...[
+            const SizedBox(height: 8),
+            pairedAction,
+          ],
         ],
       ),
+    );
+  }
+}
+
+/// Content of the "File a claim" dialog, as its own widget so its
+/// [TextEditingController] is disposed when the dialog closes — tied to
+/// *this* dialog's own lifecycle rather than to [_LifecycleBanner], which
+/// is a plain (stateless) [ConsumerWidget] rebuilt fresh on every claim
+/// status change and so isn't a safe place to own a long-lived controller.
+class _ClaimAnswerDialog extends StatefulWidget {
+  const _ClaimAnswerDialog();
+
+  @override
+  State<_ClaimAnswerDialog> createState() => _ClaimAnswerDialogState();
+}
+
+class _ClaimAnswerDialogState extends State<_ClaimAnswerDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('File a claim'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        maxLines: 3,
+        decoration: const InputDecoration(
+          hintText: 'Describe a unique detail that proves this is yours',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: const Text('Submit'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Content of the "How did it go?" rating dialog — same reasoning as
+/// [_ClaimAnswerDialog] for why this owns its controller as a proper
+/// [StatefulWidget] instead of a bare [StatefulBuilder] closure.
+class _RatingDialog extends StatefulWidget {
+  const _RatingDialog();
+
+  @override
+  State<_RatingDialog> createState() => _RatingDialogState();
+}
+
+class _RatingDialogState extends State<_RatingDialog> {
+  var _stars = 5;
+  final _commentController = TextEditingController();
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('How did it go?'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (var i = 1; i <= 5; i++)
+                IconButton(
+                  onPressed: () => setState(() => _stars = i),
+                  tooltip: '$i star${i == 1 ? '' : 's'}',
+                  icon: Icon(
+                    i <= _stars ? Icons.star_rounded : Icons.star_border_rounded,
+                    color: theme.colorScheme.secondary,
+                  ),
+                ),
+            ],
+          ),
+          TextField(
+            controller: _commentController,
+            decoration: const InputDecoration(hintText: 'Add a comment (optional)'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Skip'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(
+            context,
+            (stars: _stars, comment: _commentController.text.trim()),
+          ),
+          child: const Text('Submit'),
+        ),
+      ],
     );
   }
 }

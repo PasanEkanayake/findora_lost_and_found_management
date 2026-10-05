@@ -14,6 +14,7 @@ import '../../core/ml/tflite_classifier.dart';
 import '../../core/ml/tflite_provider.dart';
 import '../matches/data/matches_providers.dart';
 import 'data/items_providers.dart';
+import 'widgets/photo_strip.dart';
 
 /// Reporting form. Photos are classified on-device twice, deliberately:
 /// once eagerly after the first photo (purely to suggest a category while
@@ -52,6 +53,14 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
   bool _isSubmitting = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Wakes the (optional) text-embedding service now, while the person is
+    // still filling out the form — see TextEmbeddingService.warmUp.
+    ref.read(textEmbeddingServiceProvider).warmUp();
+  }
+
+  @override
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
@@ -69,13 +78,20 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
     );
   }
 
-  Future<void> _pickPhoto(ImageSource source) async {
-    final picked = await _picker.pickImage(source: source, imageQuality: 85);
-    if (picked == null) return;
-    final file = File(picked.path);
+  Future<void> _addPhoto() async {
+    final file = await pickPhotoWithSheet(context, _picker);
+    if (file == null || !mounted) return;
     final isFirstPhoto = _photos.isEmpty;
     setState(() => _photos.add(file));
     if (isFirstPhoto) _suggestCategoryFromPhoto(file);
+  }
+
+  /// Swaps the photo at [index] for a newly picked one, keeping its place.
+  Future<void> _replacePhoto(int index) async {
+    final file = await pickPhotoWithSheet(context, _picker);
+    if (file == null || !mounted || index >= _photos.length) return;
+    setState(() => _photos[index] = file);
+    if (index == 0) _suggestCategoryFromPhoto(file);
   }
 
   /// Runs the on-device model on the first photo purely for a live
@@ -128,34 +144,6 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
         .join(' ');
   }
 
-  void _showPhotoSourceSheet() {
-    showModalBottomSheet(
-      context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('Take a photo'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _pickPhoto(ImageSource.camera);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Choose from gallery'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _pickPhoto(ImageSource.gallery);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Future<void> _detectLocation() async {
     setState(() => _isLocating = true);
     try {
@@ -187,6 +175,7 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
         // Reverse geocoding can fail independently of getting a fix — the
         // coordinates are still useful even without a friendly label.
       }
+      if (!mounted) return;
 
       setState(() {
         _latitude = position.latitude;
@@ -270,10 +259,11 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
 
   Future<void> _handleSubmit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_photos.isEmpty) {
-      _showMessage('Add at least one photo.');
-      return;
-    }
+    // Photos are optional — only the title is required (checked by the
+    // form validator above). An item posted without one is shown with the
+    // Findora placeholder instead, and the AI can still match it by title
+    // and description (see 12_text_matching.sql); adding a photo later via
+    // Edit adds photo matching on top of that.
 
     setState(() => _isSubmitting = true);
     try {
@@ -309,6 +299,20 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
       // The record_matches_for_image trigger runs synchronously as part of
       // the item_images insert above, so any matches already exist by now.
       ref.invalidate(matchesProvider);
+
+      // Posting deliberately doesn't fail just because the AI couldn't
+      // analyze a photo — but it used to say nothing at all, and a photo
+      // with no embedding can never be matched. Say so, and point at the
+      // retry (MatchesScreen re-scans photos that are missing one).
+      final unanalyzed = classifications.where((c) => c == null).length;
+      if (unanalyzed > 0) {
+        _showMessage(
+          'Posted, but the AI could not analyze $unanalyzed '
+          'photo${unanalyzed == 1 ? '' : 's'}, so no matches can be found yet. '
+          'Open Matches and tap the scan icon to retry.',
+          isError: true,
+        );
+      }
       context.pop();
     } catch (_) {
       _showMessage(
@@ -350,10 +354,20 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
                 onSelectionChanged: (value) => setState(() => _type = value.first),
               ),
               const SizedBox(height: 20),
-              _PhotoRow(
-                photos: _photos,
-                onAdd: _showPhotoSourceSheet,
+              PhotoStrip(
+                items: [for (final photo in _photos) PhotoStripItem.local(photo)],
+                onAdd: _addPhoto,
                 onRemove: (i) => setState(() => _photos.removeAt(i)),
+                onReplace: _replacePhoto,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _photos.isEmpty
+                    ? 'Photos are optional — the AI already matches by title and '
+                        "description. Add one and it'll match by photo too."
+                    : 'Tap a photo to change it.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
               if (_isSuggesting || _detectedLabel != null) ...[
                 const SizedBox(height: 10),
@@ -368,7 +382,7 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
                 controller: _titleController,
                 decoration: const InputDecoration(labelText: 'Title'),
                 validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Give it a short title' : null,
+                    (v == null || v.trim().isEmpty) ? 'A title is required' : null,
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -497,96 +511,5 @@ class _DetectionBadge extends StatelessWidget {
 
   String _prettify(String rawLabel) {
     return rawLabel.replaceAll('_', ' ');
-  }
-}
-
-class _PhotoRow extends StatelessWidget {
-  const _PhotoRow({
-    required this.photos,
-    required this.onAdd,
-    required this.onRemove,
-  });
-
-  final List<File> photos;
-  final VoidCallback onAdd;
-  final ValueChanged<int> onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return SizedBox(
-      height: 96,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        children: [
-          for (var i = 0; i < photos.length; i++)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: Container(
-                      width: 96,
-                      height: 96,
-                      // Fills whatever space BoxFit.contain leaves empty
-                      // around a non-square photo (most phone photos
-                      // aren't square) — plain background color rather
-                      // than leaving it transparent/white, so a portrait
-                      // or landscape shot doesn't look like it has a
-                      // stray gap next to it.
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      child: Image.file(
-                        photos[i],
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 0,
-                    right: 0,
-                    child: Semantics(
-                      label: 'Remove photo',
-                      button: true,
-                      child: GestureDetector(
-                        onTap: () => onRemove(i),
-                        behavior: HitTestBehavior.opaque,
-                        // Padding widens the actual tap target well beyond
-                        // the visible circle — full 48dp isn't achievable
-                        // here without overlapping the next thumbnail (only
-                        // 12px separates them), but this is a meaningful
-                        // improvement over the bare 24dp circle.
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: CircleAvatar(
-                            radius: 12,
-                            backgroundColor: Colors.black.withValues(alpha: 0.6),
-                            child: const Icon(Icons.close, size: 14, color: Colors.white),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          InkWell(
-            onTap: onAdd,
-            borderRadius: BorderRadius.circular(14),
-            child: Container(
-              width: 96,
-              height: 96,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: theme.colorScheme.outlineVariant, width: 1.5),
-                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-              ),
-              child: Icon(Icons.add_a_photo_outlined, color: theme.colorScheme.primary),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }

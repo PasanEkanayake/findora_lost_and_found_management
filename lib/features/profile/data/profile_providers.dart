@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'admin_repository.dart';
 import 'profile_model.dart';
 import 'profile_repository.dart';
+import 'rating_model.dart';
 import 'report_model.dart';
 
 final profileRepositoryProvider = Provider<ProfileRepository>((ref) {
@@ -14,6 +15,10 @@ final profileRepositoryProvider = Provider<ProfileRepository>((ref) {
 /// MainShell-adjacent screens to gate the admin entry point on `isAdmin`.
 final myProfileProvider = FutureProvider.autoDispose<ProfileModel>((ref) {
   return ref.watch(profileRepositoryProvider).fetchMyProfile();
+});
+
+final myRatingsProvider = FutureProvider.autoDispose<List<RatingModel>>((ref) {
+  return ref.watch(profileRepositoryProvider).fetchMyRatings();
 });
 
 final adminRepositoryProvider = Provider<AdminRepository>((ref) {

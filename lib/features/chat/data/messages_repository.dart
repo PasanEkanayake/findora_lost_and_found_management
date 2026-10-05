@@ -1,11 +1,22 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../core/supabase/supabase_client.dart';
 import 'conversation_model.dart';
 import 'message_model.dart';
+
+/// See ContactRepository's `_LiveThread` — same idea, keyed by match id.
+class _LiveConversation {
+  const _LiveConversation({required this.upsert, required this.syncNewer});
+
+  final void Function(Map<String, dynamic> record) upsert;
+  final Future<void> Function() syncNewer;
+}
+
+final Map<String, _LiveConversation> _liveConversations = {};
 
 class MessagesRepository {
   const MessagesRepository();
@@ -37,6 +48,7 @@ class MessagesRepository {
       final index = current.indexWhere((m) => m.id == message.id);
       if (index == -1) {
         current.add(message);
+        current.sort((a, b) => a.createdAt.compareTo(b.createdAt));
       } else {
         current[index] = message;
       }
@@ -64,8 +76,33 @@ class MessagesRepository {
       }
     }
 
+    /// See ContactRepository.streamMessages' `syncNewer` — same safety net
+    /// for when the realtime channel isn't delivering.
+    Future<void> syncNewer() async {
+      try {
+        DateTime? newest;
+        for (final m in current) {
+          if (newest == null || m.createdAt.isAfter(newest)) newest = m.createdAt;
+        }
+        final base = supabase
+            .from(AppConstants.messagesTable)
+            .select()
+            .eq('match_id', matchId);
+        final filtered =
+            newest == null ? base : base.gt('created_at', newest.toUtc().toIso8601String());
+        final rows = await filtered.order('created_at');
+        for (final row in rows as List) {
+          upsert(row as Map<String, dynamic>);
+        }
+      } catch (_) {
+        // Best-effort by design — the next tick just tries again.
+      }
+    }
+
     controller = StreamController<List<MessageModel>>.broadcast(
       onListen: () {
+        _liveConversations[matchId] =
+            _LiveConversation(upsert: upsert, syncNewer: syncNewer);
         loadInitial();
         channel = supabase
             .channel('messages:$matchId')
@@ -91,9 +128,12 @@ class MessagesRepository {
               ),
               callback: (payload) => upsert(payload.newRecord),
             )
-            .subscribe();
+            .subscribe((status, error) {
+              debugPrint('messages realtime [$matchId]: $status ${error ?? ''}');
+            });
       },
       onCancel: () {
+        _liveConversations.remove(matchId);
         final ch = channel;
         if (ch != null) supabase.removeChannel(ch);
       },
@@ -102,17 +142,29 @@ class MessagesRepository {
     return controller.stream;
   }
 
+  /// See ContactRepository.syncNow.
+  Future<void> syncNow(String matchId) async {
+    await _liveConversations[matchId]?.syncNewer();
+  }
+
+  /// See ContactRepository.sendMessage — the stored row is pushed straight
+  /// into the open conversation instead of waiting for a realtime echo.
   Future<void> sendMessage({
     required String matchId,
     required String receiverId,
     required String content,
   }) async {
-    await supabase.from(AppConstants.messagesTable).insert({
-      'match_id': matchId,
-      'sender_id': supabase.auth.currentUser!.id,
-      'receiver_id': receiverId,
-      'content': content,
-    });
+    final row = await supabase
+        .from(AppConstants.messagesTable)
+        .insert({
+          'match_id': matchId,
+          'sender_id': supabase.auth.currentUser!.id,
+          'receiver_id': receiverId,
+          'content': content,
+        })
+        .select()
+        .single();
+    _liveConversations[matchId]?.upsert(row);
   }
 
   /// Marks every unread message *addressed to the caller* in this

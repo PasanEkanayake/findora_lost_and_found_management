@@ -21,11 +21,11 @@ class PickedLocation {
 /// human eye.
 ///
 /// Uses the fixed-center-pin-over-a-moving-map technique rather than a
-/// draggable [Marker]: the pin is really just an [Icon] pinned to the
+/// draggable marker: the pin is really just an [Icon] pinned to the
 /// screen's center in a [Stack], and what moves is the map underneath it
-/// (tracked via [GoogleMap.onCameraMove]) — this reads as "drag the pin"
-/// to the person using it, but avoids draggable-marker's occasional
-/// platform-specific jank and imprecision on fast flings.
+/// (tracked via onCameraMoveStarted/onCameraMove/onCameraIdle) — this reads
+/// as "drag the pin" to the person using it, but avoids draggable-marker's
+/// occasional platform-specific jank and imprecision on fast flings.
 class LocationPickerScreen extends StatefulWidget {
   const LocationPickerScreen({
     super.key,
@@ -53,22 +53,30 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
 
   Future<void> _confirm() async {
     setState(() => _isConfirming = true);
-    String label = 'Custom location';
+
+    var label = 'Pinned location';
     try {
-      final placemarks =
-          await Geocoding().placemarkFromCoordinates(_center.latitude, _center.longitude);
+      // geocoding 5.x replaced the old top-level placemarkFromCoordinates()
+      // function with an instance method on the Geocoding class.
+      final placemarks = await Geocoding().placemarkFromCoordinates(
+        _center.latitude,
+        _center.longitude,
+      );
       if (placemarks.isNotEmpty) {
         final p = placemarks.first;
-        final parts = [p.street, p.locality].where((s) => s != null && s.isNotEmpty);
-        if (parts.isNotEmpty) label = parts.join(', ');
+        label = [p.street, p.locality]
+            .where((part) => part != null && part.isNotEmpty)
+            .join(', ');
+        if (label.isEmpty) label = 'Pinned location';
       }
     } catch (_) {
-      // Coordinates alone are still useful without a friendly label.
-    } finally {
-      if (mounted) setState(() => _isConfirming = false);
+      // Reverse geocoding can fail independently of the map itself — the
+      // coordinates are still useful even without a friendly label.
     }
 
     if (!mounted) return;
+    setState(() => _isConfirming = false);
+
     Navigator.of(context).pop(
       PickedLocation(latitude: _center.latitude, longitude: _center.longitude, label: label),
     );
@@ -94,11 +102,12 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
             onCameraMoveStarted: () => setState(() => _isMoving = true),
             onCameraMove: (position) => _center = position.target,
             onCameraIdle: () => setState(() => _isMoving = false),
+            zoomControlsEnabled: false,
             myLocationButtonEnabled: false,
           ),
 
           // The fixed "pin" — see the class doc for why this isn't a
-          // draggable Marker. Lifts slightly and casts a bigger shadow
+          // draggable marker. Lifts slightly and casts a bigger shadow
           // while the map is moving, the same visual cue mapping apps
           // (Google Maps, Uber) use for this exact interaction.
           IgnorePointer(

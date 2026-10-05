@@ -18,6 +18,7 @@ import '../../features/matches/item_matches_screen.dart';
 import '../../features/matches/matches_screen.dart';
 import '../../features/chat/chat_list_screen.dart';
 import '../../features/chat/chat_screen.dart';
+import '../../features/notifications/notifications_screen.dart';
 import '../../features/contact/contact_chat_screen.dart';
 import '../../features/profile/profile_screen.dart';
 import '../../features/items/item_detail_screen.dart';
@@ -56,6 +57,18 @@ class GoRouterRefreshStream extends ChangeNotifier {
 
 /// Exposed as a provider so it can be watched/disposed the Riverpod way,
 /// and so later phases can inject a fake router in tests if needed.
+/// A plain reference to the single live [GoRouter] instance, kept in sync
+/// by [appRouterProvider] below. Exists for exactly one reason: FCM tap
+/// handling (core/notifications/push_notifications.dart) runs outside the
+/// widget tree — there's no BuildContext or WidgetRef available in a
+/// FirebaseMessaging callback — so it can't reach the router the normal
+/// `context.push(...)`/`ref.watch(appRouterProvider)` way. Null until the
+/// provider below has been read at least once (i.e. until the app has
+/// actually built its first frame), which a tap on a notification that
+/// cold-starts the app can race — see that file's handling of
+/// getInitialMessage() for how it copes with that.
+GoRouter? rootRouter;
+
 final appRouterProvider = Provider<GoRouter>((ref) {
   final router = GoRouter(
     initialLocation: '/splash',
@@ -202,6 +215,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           StatefulShellBranch(
             routes: [
               GoRoute(
+                path: '/notifications',
+                builder: (context, state) =>
+                    const TabBackGuard(isHomeTab: false, child: NotificationsScreen()),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
                 path: '/profile',
                 builder: (context, state) =>
                     const TabBackGuard(isHomeTab: false, child: ProfileScreen()),
@@ -214,5 +236,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   );
 
   ref.onDispose(router.dispose);
+  rootRouter = router;
   return router;
 });

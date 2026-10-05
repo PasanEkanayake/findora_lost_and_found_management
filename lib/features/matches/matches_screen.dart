@@ -9,14 +9,17 @@ import 'data/match_model.dart';
 import 'data/matches_providers.dart';
 import 'widgets/match_card.dart';
 
-/// Which of the non-mandatory signals a match must have a meaningful
-/// value for, to narrow the list down. Image similarity isn't one of the
-/// options here on purpose: every match already passed the image
-/// threshold (see matching_threshold() in
-/// supabase/11_realtime_and_matching_fixes.sql) just to exist as a
-/// candidate at all, so filtering by "has an image match" would never
-/// actually exclude anything.
-enum _MatchFilter { all, text, nearby, time }
+/// Narrows the match list by which signal(s) actually contributed to it.
+///
+/// [imageOnly]/[textOnly]/[both] didn't always make sense as separate
+/// options: before `supabase/12_text_matching.sql`, every match had to
+/// pass the image threshold just to exist as a candidate at all (see
+/// `matching_threshold()`), so "only image" and "both" would have been
+/// identical and "only text" would always have been empty. Text matching
+/// now finds pairs with no photo involved at all, so a match's
+/// `imageSimilarity`/`textSimilarity` can each independently be present or
+/// null — these three options are how to tell those cases apart.
+enum _MatchFilter { all, imageOnly, textOnly, both, nearby, time }
 
 /// Surfaces candidate matches from `my_matches()` — populated automatically
 /// by the `record_matches_for_image` trigger whenever a photo with an
@@ -34,11 +37,17 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
   _MatchFilter _filter = _MatchFilter.all;
 
   bool _passesFilter(MatchModel match) {
+    final hasImage = match.imageSimilarity != null;
+    final hasText = match.textSimilarity != null && match.textSimilarity! >= 0.5;
     switch (_filter) {
       case _MatchFilter.all:
         return true;
-      case _MatchFilter.text:
-        return match.textSimilarity != null && match.textSimilarity! >= 0.5;
+      case _MatchFilter.imageOnly:
+        return hasImage && !hasText;
+      case _MatchFilter.textOnly:
+        return hasText && !hasImage;
+      case _MatchFilter.both:
+        return hasImage && hasText;
       case _MatchFilter.nearby:
         // 5km, matching the map view's default search radius elsewhere
         // in the app — "nearby" means the same thing in both places.
@@ -216,9 +225,21 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
                         ),
                         const SizedBox(width: 8),
                         _FilterChip(
-                          label: '📝 Text match',
-                          selected: _filter == _MatchFilter.text,
-                          onTap: () => setState(() => _filter = _MatchFilter.text),
+                          label: '📷 Image only',
+                          selected: _filter == _MatchFilter.imageOnly,
+                          onTap: () => setState(() => _filter = _MatchFilter.imageOnly),
+                        ),
+                        const SizedBox(width: 8),
+                        _FilterChip(
+                          label: '📝 Text only',
+                          selected: _filter == _MatchFilter.textOnly,
+                          onTap: () => setState(() => _filter = _MatchFilter.textOnly),
+                        ),
+                        const SizedBox(width: 8),
+                        _FilterChip(
+                          label: '📷📝 Both',
+                          selected: _filter == _MatchFilter.both,
+                          onTap: () => setState(() => _filter = _MatchFilter.both),
                         ),
                         const SizedBox(width: 8),
                         _FilterChip(

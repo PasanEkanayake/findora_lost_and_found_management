@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import 'chat_screen.dart';
 import 'data/conversation_model.dart';
+import '../../core/widgets/item_photo.dart';
 import '../../core/widgets/shimmer_list.dart';
 import 'data/messages_providers.dart';
 import '../contact/contact_chat_screen.dart';
@@ -75,7 +75,12 @@ class _MatchConversationsTab extends ConsumerWidget {
           return ListView.separated(
             itemCount: conversations.length,
             separatorBuilder: (_, __) => const Divider(height: 1, indent: 76),
-            itemBuilder: (context, index) => _ConversationTile(conversations[index]),
+            itemBuilder: (context, index) => _ConversationTile(
+              conversations[index],
+              // Refetch on the way back from a chat so the preview text
+              // and unread badge reflect what just happened in it.
+              onReturn: () => ref.invalidate(conversationsProvider),
+            ),
           );
         },
       ),
@@ -111,7 +116,10 @@ class _ContactThreadsTab extends ConsumerWidget {
           return ListView.separated(
             itemCount: threads.length,
             separatorBuilder: (_, __) => const Divider(height: 1, indent: 76),
-            itemBuilder: (context, index) => _ContactThreadTile(threads[index]),
+            itemBuilder: (context, index) => _ContactThreadTile(
+              threads[index],
+              onReturn: () => ref.invalidate(contactThreadsProvider),
+            ),
           );
         },
       ),
@@ -120,9 +128,10 @@ class _ContactThreadsTab extends ConsumerWidget {
 }
 
 class _ConversationTile extends StatelessWidget {
-  const _ConversationTile(this.conversation);
+  const _ConversationTile(this.conversation, {required this.onReturn});
 
   final ConversationModel conversation;
+  final VoidCallback onReturn;
 
   @override
   Widget build(BuildContext context) {
@@ -136,17 +145,7 @@ class _ConversationTile extends StatelessWidget {
         child: SizedBox(
           width: 52,
           height: 52,
-          child: conversation.matchedItemImageUrl == null
-              ? Container(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  child: Icon(Icons.image_outlined, color: theme.colorScheme.onSurfaceVariant),
-                )
-              : CachedNetworkImage(
-                  imageUrl: conversation.matchedItemImageUrl!,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) =>
-                      Container(color: theme.colorScheme.surfaceContainerHighest),
-                ),
+          child: ItemPhoto(url: conversation.matchedItemImageUrl),
         ),
       ),
       title: Text(
@@ -190,25 +189,29 @@ class _ConversationTile extends StatelessWidget {
           ],
         ],
       ),
-      onTap: () => context.push(
-        '/chat',
-        extra: ChatScreenArgs(
-          matchId: conversation.matchId,
-          otherUserId: conversation.otherUserId,
-          otherItemTitle: conversation.matchedItemTitle,
-          myItemId: conversation.myItemId,
-          matchedItemId: conversation.matchedItemId,
-          matchedItemType: conversation.matchedItemType,
-        ),
-      ),
+      onTap: () async {
+        await context.push<void>(
+          '/chat',
+          extra: ChatScreenArgs(
+            matchId: conversation.matchId,
+            otherUserId: conversation.otherUserId,
+            otherItemTitle: conversation.matchedItemTitle,
+            myItemId: conversation.myItemId,
+            matchedItemId: conversation.matchedItemId,
+            matchedItemType: conversation.matchedItemType,
+          ),
+        );
+        onReturn();
+      },
     );
   }
 }
 
 class _ContactThreadTile extends StatelessWidget {
-  const _ContactThreadTile(this.thread);
+  const _ContactThreadTile(this.thread, {required this.onReturn});
 
   final ContactThreadModel thread;
+  final VoidCallback onReturn;
 
   @override
   Widget build(BuildContext context) {
@@ -222,17 +225,7 @@ class _ContactThreadTile extends StatelessWidget {
         child: SizedBox(
           width: 52,
           height: 52,
-          child: thread.itemImageUrl == null
-              ? Container(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  child: Icon(Icons.image_outlined, color: theme.colorScheme.onSurfaceVariant),
-                )
-              : CachedNetworkImage(
-                  imageUrl: thread.itemImageUrl!,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) =>
-                      Container(color: theme.colorScheme.surfaceContainerHighest),
-                ),
+          child: ItemPhoto(url: thread.itemImageUrl),
         ),
       ),
       title: Text(
@@ -276,14 +269,17 @@ class _ContactThreadTile extends StatelessWidget {
           ],
         ],
       ),
-      onTap: () => context.push(
-        '/contact-chat',
-        extra: ContactChatArgs(
-          threadId: thread.threadId,
-          itemTitle: thread.itemTitle,
-          otherUserName: thread.otherUserName,
-        ),
-      ),
+      onTap: () async {
+        await context.push<void>(
+          '/contact-chat',
+          extra: ContactChatArgs(
+            threadId: thread.threadId,
+            itemTitle: thread.itemTitle,
+            otherUserName: thread.otherUserName,
+          ),
+        );
+        onReturn();
+      },
     );
   }
 }

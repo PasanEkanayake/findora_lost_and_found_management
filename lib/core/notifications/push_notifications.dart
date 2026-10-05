@@ -3,7 +3,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../constants/app_constants.dart';
+import '../router/app_router.dart' show rootRouter;
 import '../supabase/supabase_client.dart';
+import '../../features/notifications/data/notifications_repository.dart';
 
 final _localNotifications = FlutterLocalNotificationsPlugin();
 
@@ -14,11 +16,13 @@ final _localNotifications = FlutterLocalNotificationsPlugin();
 /// notifications" rather than a crash, the same pattern used for the
 /// TFLite model and the Google Maps API key elsewhere in this app.
 ///
-/// What this does NOT do: actually send a notification when a match or
-/// message happens. That's a server-side piece — a Supabase Edge Function
-/// (using the FCM HTTP v1 API) triggered by a Database Webhook on inserts
-/// into `matches`/`messages` — which needs a Firebase service account key
-/// this sandbox has no way to hold securely. See README.md.
+/// The actual *sending* of a push happens server-side — the
+/// `send-push-notification` Edge Function
+/// (supabase/functions/send-push-notification/), triggered by a Database
+/// Webhook whenever a row lands in `notifications`
+/// (supabase/14_notifications.sql). Setting that up needs a Firebase
+/// service account key from your own project, a real secret this sandbox
+/// has no way to hold — see README.md, "Sending real push notifications".
 Future<void> initializePushNotifications() async {
   final messaging = FirebaseMessaging.instance;
   await messaging.requestPermission();
@@ -48,6 +52,53 @@ Future<void> initializePushNotifications() async {
 
   messaging.onTokenRefresh.listen(_saveToken);
   await registerPushTokenForCurrentUser();
+
+  // Tapped while the app was merely backgrounded (not killed) — the
+  // router already exists by the time this can fire, so it's safe to
+  // navigate immediately.
+  FirebaseMessaging.onMessageOpenedApp.listen((message) {
+    final route = _handleTappedMessage(message);
+    if (route != null) rootRouter?.push(route);
+  });
+
+  // Tapped while the app was fully closed, which is *this* call —
+  // cold-starting the app — so there is no router yet (this runs inside
+  // main(), before runApp()). Stash the route rather than navigating, for
+  // FindoraApp's first frame to pick up once the router exists — see
+  // consumePendingNotificationRoute's doc.
+  final initialMessage = await messaging.getInitialMessage();
+  if (initialMessage != null) {
+    _pendingRoute = _handleTappedMessage(initialMessage);
+  }
+}
+
+/// Reads where a tapped notification should go (the same route
+/// `NotificationModel.destinationRoute` would compute — the Edge Function
+/// sends it pre-computed in the `data` payload, see that function's
+/// `destinationRoute()`), and marks the notification read. Marking read
+/// is fire-and-forget: if it fails, the worst case is the Alerts badge is
+/// briefly one count off, not worth blocking navigation over.
+String? _handleTappedMessage(RemoteMessage message) {
+  final notificationId = message.data['notification_id'] as String?;
+  if (notificationId != null) {
+    const NotificationsRepository().markRead(notificationId).catchError((e) {
+      debugPrint('Could not mark notification read from a push tap: $e');
+    });
+  }
+  return message.data['route'] as String?;
+}
+
+String? _pendingRoute;
+
+/// Consumes (returns once, then clears) the route stashed by a
+/// cold-start notification tap — see initializePushNotifications's
+/// getInitialMessage handling above for why this can't just navigate
+/// directly. FindoraApp calls this on its first frame, once the router
+/// it needs is guaranteed to exist.
+String? consumePendingNotificationRoute() {
+  final route = _pendingRoute;
+  _pendingRoute = null;
+  return route;
 }
 
 /// Saves this device's current FCM token to the signed-in user's profile.

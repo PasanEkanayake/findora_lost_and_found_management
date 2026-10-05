@@ -73,6 +73,7 @@ class _ItemsMapViewState extends ConsumerState<ItemsMapView> {
     }
 
     final itemsAsync = ref.watch(nearbyItemsProvider(center));
+    final centerPoint = LatLng(center.latitude, center.longitude);
 
     return itemsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -83,31 +84,24 @@ class _ItemsMapViewState extends ConsumerState<ItemsMapView> {
         ),
       ),
       data: (items) {
-        final markers = items.map((item) {
-          return Marker(
-            markerId: MarkerId(item.id),
-            position: LatLng(item.latitude, item.longitude),
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-              item.isLost ? BitmapDescriptor.hueRed : BitmapDescriptor.hueGreen,
-            ),
-            infoWindow: InfoWindow(
-              title: item.title,
-              snippet: [
-                if (item.categoryName != null) item.categoryName!,
-                if (item.locationLabel != null) item.locationLabel!,
-              ].join(' · '),
-            ),
-          );
-        }).toSet();
-
         return GoogleMap(
-          initialCameraPosition: CameraPosition(
-            target: LatLng(center.latitude, center.longitude),
-            zoom: 13,
-          ),
-          markers: markers,
+          initialCameraPosition: CameraPosition(target: centerPoint, zoom: 13),
           myLocationEnabled: true,
-          myLocationButtonEnabled: true,
+          myLocationButtonEnabled: false,
+          markers: {
+            for (final item in items)
+              Marker(
+                markerId: MarkerId(item.id),
+                position: LatLng(item.latitude, item.longitude),
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  item.isLost ? BitmapDescriptor.hueRed : BitmapDescriptor.hueGreen,
+                ),
+                infoWindow: InfoWindow(
+                  title: item.title,
+                  snippet: item.isLost ? 'Lost' : 'Found',
+                ),
+              ),
+          },
         );
       },
     );

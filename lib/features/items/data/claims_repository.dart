@@ -44,8 +44,21 @@ class ClaimsRepository {
     return row['status'] as String;
   }
 
-  Future<void> markItemResolved(String itemId) async {
-    await supabase.from(AppConstants.itemsTable).update({'status': 'resolved'}).eq('id', itemId);
+  /// Records the handoff: resolves the found post **and** the lost post it
+  /// was matched with, in one step, through the `mark_returned()` RPC
+  /// (supabase/13_returned_items_and_ratings.sql). Both posts then leave
+  /// the feed, search, map and everyone else's matches, and stay visible
+  /// only to their two owners.
+  ///
+  /// It's an RPC rather than two client-side `update`s because the person
+  /// marking the return can only update *their own* post — the lost post
+  /// belongs to someone else — and because the database re-checks that the
+  /// return is genuine (an approved claim and a confirmed match).
+  Future<void> markReturned({required String foundItemId, required String lostItemId}) async {
+    await supabase.rpc('mark_returned', params: {
+      'p_found_item_id': foundItemId,
+      'p_lost_item_id': lostItemId,
+    });
   }
 
   Future<void> submitRating({
