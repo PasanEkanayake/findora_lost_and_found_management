@@ -90,6 +90,7 @@ genuinely optional — see their own rows below).
 
 | Alerts tab + unread badges | A new **Alerts** tab (between Chats and Profile) lists new matches, match confirmations, claim filed/approved/rejected, items returned, and new ratings — tap one to jump straight to it, or **Mark all read**. It and the **Chats** tab now show a number badge in the bottom nav when there's something unread. Ordinary chat messages aren't included in Alerts on purpose — the Chats badge already covers those; see `supabase/14_notifications.sql`'s header | **Required:** run `supabase/14_notifications.sql` |
 
+| Push notification secrets: Windows-safe now | Step 3 of the push-notification setup used a bash one-liner (`NAME="$(cat file)"`) that silently breaks in PowerShell — `cat` there returns an array of lines that gets rejoined with spaces, not newlines, so the secret arrives mangled and the CLI rejects it with a confusing error. Replaced with a `--env-file`-based PowerShell version that avoids the problem entirely; the original one-liner is kept as the bash/WSL alternative | None |
 | Real push notifications (code ready, needs your setup) | The missing half of push notifications is now written: `supabase/functions/send-push-notification/index.ts` sends a real push whenever a notification is created, and the app now navigates correctly when one is tapped, cold start included. This needs your own Firebase service account and a few `supabase` CLI commands — it can't be finished from here. See **"Sending real push notifications"** below | None (no new migration — it sends off the existing `notifications` table) |
 
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
@@ -1495,15 +1496,50 @@ or muting rules), not a small addition to this one.
    supabase link --project-ref YOUR_PROJECT_REF
    ```
    (The project ref is in your Supabase dashboard URL.)
-3. **Set the function's secrets** — run from the project root, with the
-   downloaded JSON file's actual path, and a password of your own
-   choosing for the webhook secret:
+3. **Set the function's secrets.** The service account file is
+   multi-line JSON, and `NAME="$(cat file)"` — the usual bash way to set
+   a secret from a file — doesn't survive PowerShell: `cat` there is an
+   alias for `Get-Content`, which returns an *array of lines*, and
+   PowerShell rejoins that array with plain spaces when it lands inside
+   `"..."`, not real newlines. The result looks like one string in your
+   terminal but isn't one as far as `supabase.exe`'s argument parsing is
+   concerned, and the command fails confusingly (often on some word
+   *inside* the key, like `PRIVATE`, rather than on the command itself).
+
+   `--env-file` sidesteps all of this — it reads the file itself rather
+   than going through a shell argument at all. **In PowerShell**, from
+   the project root (adjust the path to your downloaded file):
+   ```powershell
+   $json = Get-Content -Raw "path\to\your-service-account.json" | ConvertFrom-Json | ConvertTo-Json -Compress -Depth 10
+   "FIREBASE_SERVICE_ACCOUNT_JSON=$json" | Set-Content -Encoding ascii supabase\.secrets.env
+   "WEBHOOK_SECRET=$([guid]::NewGuid().ToString())" | Add-Content -Encoding ascii supabase\.secrets.env
+   supabase secrets set --env-file supabase\.secrets.env
+   Remove-Item supabase\.secrets.env
+   ```
+   The `ConvertFrom-Json | ConvertTo-Json -Compress` round trip isn't
+   decoration — it collapses the file to one line with its internal
+   newlines correctly re-escaped as `\n`, which is what guarantees the
+   whole thing survives as a single `NAME=value` line regardless of how
+   `--env-file` parses multi-line values. `[guid]::NewGuid()` is just a
+   convenient way to get a long random string for `WEBHOOK_SECRET`
+   without having to make one up. The last line deletes the temporary
+   file immediately after use — it briefly holds your real secret in
+   plain text, so don't leave it sitting on disk. `-Encoding ascii` is
+   there on purpose too: older Windows PowerShell writes UTF-8 files
+   with a BOM by default, which some simple line parsers misread as
+   part of the first key's name — the file's contents here (JSON plus a
+   GUID) are plain ASCII anyway, so this sidesteps the question entirely
+   rather than hoping the parser on the other end is BOM-tolerant.
+
+   **In bash/WSL/Git Bash** instead, the original one-liner works fine:
    ```bash
    supabase secrets set FIREBASE_SERVICE_ACCOUNT_JSON="$(cat path/to/your-service-account.json)"
    supabase secrets set WEBHOOK_SECRET="choose-a-long-random-string-here"
    ```
-   `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` don't need setting —
-   every Edge Function gets those two automatically.
+
+   Either way: `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` don't need
+   setting — every Edge Function gets those two automatically. Run
+   `supabase secrets list` afterward to confirm both secrets took.
 4. **Deploy the function:**
    ```bash
    supabase functions deploy send-push-notification
