@@ -228,6 +228,15 @@ class ProfileScreen extends ConsumerWidget {
             leading: Icon(Icons.logout, color: theme.colorScheme.error),
             title: Text('Sign out', style: TextStyle(color: theme.colorScheme.error)),
             onTap: () async {
+              final confirmed = await showConfirmDialog(
+                context,
+                icon: Icons.logout,
+                title: 'Sign out?',
+                message: "You'll need to sign in again to see your matches and chats.",
+                confirmLabel: 'Sign out',
+                isDestructive: true,
+              );
+              if (!confirmed) return;
               // No manual navigation needed — the router's redirect
               // callback sends signed-out users to /login automatically.
               await supabase.auth.signOut();
