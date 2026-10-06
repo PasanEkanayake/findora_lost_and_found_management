@@ -93,6 +93,18 @@ genuinely optional — see their own rows below).
 | Push notification secrets: Windows-safe now | Step 3 of the push-notification setup used a bash one-liner (`NAME="$(cat file)"`) that silently breaks in PowerShell — `cat` there returns an array of lines that gets rejoined with spaces, not newlines, so the secret arrives mangled and the CLI rejects it with a confusing error. Replaced with a `--env-file`-based PowerShell version that avoids the problem entirely; the original one-liner is kept as the bash/WSL alternative | None |
 | Real push notifications (code ready, needs your setup) | The missing half of push notifications is now written: `supabase/functions/send-push-notification/index.ts` sends a real push whenever a notification is created, and the app now navigates correctly when one is tapped, cold start included. This needs your own Firebase service account and a few `supabase` CLI commands — it can't be finished from here. See **"Sending real push notifications"** below | None (no new migration — it sends off the existing `notifications` table) |
 
+| Undo a match decision | After **Not a match** / **This is it!** a snackbar offers **Undo** for 6 seconds, and every card under *Already decided* has an **Undo** (dismissed) / **Undo confirmation** (confirmed) button that returns the match to *Needs your input*. Undoing a confirmation asks first (the chat is hidden for both people until it's confirmed again) and is refused once a claim has been filed or the item is claimed/returned. Uses the existing update policy on `matches` | None |
+| Sign-out confirmation | Profile → **Sign out** now asks "Sign out?" first | None |
+| Posts linked from chats | Both chat types show a slim 48 dp bar under the app bar: match chats link **your post** and **their post**, direct messages link **the post the thread is about** (replacing the old "About …" caption). Tapping opens the post; the bar hides while the keyboard is open. `ContactChatArgs` gained a required `itemId` | None |
+| Map button visible in light mode | The list/map toggle on the map view was white-on-white in light mode (it only looked right over the blue header or in dark mode); it now uses theme colours there | None |
+
+| Snackbars that never went away | The match **Undo** snackbar (and the login "Resend" one) stayed on screen forever: since Flutter 3.29 a `SnackBar` with an action defaults to `persist: true` and ignores `duration`. Both now set `persist: false`. Any new snackbar with an action needs the same | None |
+| Location picker opened on a blank blue map | "Adjust pin on map" before auto-detecting started at (0, 0) — open ocean. It now opens on the device's position (with a spinner), has a **My location** button, and if no position is available opens zoomed out and asks you to zoom in before it accepts a pin | None |
+| Matches list bottom padding | Extra room under the last card so its buttons (e.g. **Undo**) can scroll clear of the floating **Report item** button | None |
+
+| Editing a post refreshes its matches | A match stores a snapshot of its image / text / distance / time scores, and nothing refreshed it when a post was edited — so moving a post left the old "9 m" on its match cards. New triggers now recompute all four signals from the posts' current data whenever location, event time, title/description or photos change (scores only: matches are never created, removed, confirmed or dismissed by it). Editing the title/description also now refreshes the post's stored text embedding (it was never updated on edit), or clears it if the AI service doesn't answer so matching falls back to the actual words | **Required:** run `supabase/15_refresh_matches_on_edit.sql`, then once `select public.refresh_all_matches();` |
+| Photo analysis refills on a new photo | Posting: changing the first photo now refreshes the auto-filled **Title** and **Category** instead of keeping the first photo's guess. Anything you typed or picked yourself is never overwritten; removing the first photo re-analyses the next one (or clears the auto-filled values if none is left) | None |
+
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
 `05` and `08` are required, `06`/`07` are optional but harmless to run
 anyway:
@@ -106,8 +118,10 @@ required), `12_text_matching.sql` (matching by title/description,
 independent of photos — required),
 `13_returned_items_and_ratings.sql` (returned posts become private to
 their two owners, plus the Returned items and Ratings & reviews sections
-— required), and finally `14_notifications.sql` (the Alerts tab —
-required).
+— required), `14_notifications.sql` (the Alerts tab —
+required), and finally `15_refresh_matches_on_edit.sql` (editing a post
+now refreshes its existing matches — required for that fix; afterwards
+run `select public.refresh_all_matches();` once).
 
 ---
 
@@ -257,9 +271,10 @@ warnings about Chrome or Xcode if you don't plan to build for web/iOS.
    "Email confirmation flow" further down.
 7c. Then `08_soft_delete.sql`, `09_account_deletion.sql`,
    `10_open_matching_and_time.sql`, `11_realtime_and_matching_fixes.sql`,
-   `12_text_matching.sql`, `13_returned_items_and_ratings.sql` and
-   `14_notifications.sql`, in that order. Each is safe to re-run. `08`,
-   `10`, `11`, `12`, `13` and `14` are needed for the current app code to
+   `12_text_matching.sql`, `13_returned_items_and_ratings.sql`,
+   `14_notifications.sql` and `15_refresh_matches_on_edit.sql`, in that
+   order. Each is safe to re-run. `08`,
+   `10`, `11`, `12`, `13`, `14` and `15` are needed for the current app code to
    work properly (see the top of this file). `13` runs a one-time backfill
    automatically for posts already returned before it; see that
    migration's header.
