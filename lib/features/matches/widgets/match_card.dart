@@ -6,7 +6,10 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../chat/chat_screen.dart';
+import '../../../core/supabase/supabase_client.dart';
+import '../../../core/widgets/confirm_dialog.dart';
 import '../../../core/widgets/item_photo.dart';
+import '../../items/data/claims_providers.dart';
 import '../data/match_model.dart';
 import '../data/matches_providers.dart';
 import '../../chat/data/messages_providers.dart';
@@ -37,21 +40,124 @@ class MatchCard extends ConsumerWidget {
   final MatchModel match;
 
   Future<void> _act(WidgetRef ref, BuildContext context, String status) async {
+    // Grabbed *before* the await: once the match moves from "Needs your
+    // input" to "Already decided" this card is rebuilt under a different
+    // parent, so this State's `context`/`ref` may be dead by the time the
+    // person taps Undo on the snackbar. The messenger and container belong
+    // to the app, not to this card, so they stay usable.
+    final messenger = ScaffoldMessenger.of(context);
+    final container = ProviderScope.containerOf(context);
+    final confirmed = status == 'confirmed';
+
     try {
       await ref.read(matchesRepositoryProvider).updateStatus(match.matchId, status);
-      if (!context.mounted) return;
-      ref.invalidate(matchesProvider);
-      if (status == 'confirmed') {
+      container.invalidate(matchesProvider);
+      if (confirmed) {
         // A confirmed match is exactly what makes it show up in
         // my_conversations(), so the chat list needs to know too.
-        ref.invalidate(conversationsProvider);
+        container.invalidate(conversationsProvider);
       }
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(confirmed ? 'Match confirmed.' : 'Marked as not a match.'),
+            duration: const Duration(seconds: 6),
+            // Since Flutter 3.29 a SnackBar that has an action defaults to
+            // `persist: true` (Material 3 spec) and ignores `duration` — it
+            // stays until swiped away. Without this line the Undo bar would
+            // never leave the screen.
+            persist: false,
+            action: SnackBarAction(
+              label: 'Undo',
+              onPressed: () => _revert(
+                container: container,
+                messenger: messenger,
+                wasConfirmed: confirmed,
+              ),
+            ),
+          ),
+        );
     } catch (_) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text("Couldn't update this match. Try again.")),
       );
     }
+  }
+
+  /// Puts a decided match back to "pending" so it can be decided again.
+  /// Shared by the snackbar's Undo and the Undo button on decided cards.
+  ///
+  /// Takes the container/messenger rather than a WidgetRef/BuildContext on
+  /// purpose — see [_act].
+  Future<void> _revert({
+    required ProviderContainer container,
+    required ScaffoldMessengerState messenger,
+    required bool wasConfirmed,
+  }) async {
+    try {
+      if (wasConfirmed && await _hasProgressedPastConfirmation(container)) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'A claim has already been filed for this match, so it can no longer be undone.',
+            ),
+          ),
+        );
+        return;
+      }
+      await container.read(matchesRepositoryProvider).updateStatus(match.matchId, 'pending');
+      container.invalidate(matchesProvider);
+      if (wasConfirmed) container.invalidate(conversationsProvider);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Undone — this match is back under "Needs your input".')),
+        );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Couldn't undo that. Try again.")),
+      );
+    }
+  }
+
+  /// A confirmed match can only be safely un-confirmed while it is still
+  /// just a chat. Once a claim has been filed (or the item is already
+  /// claimed/returned), pulling the match back to "pending" would hide a
+  /// conversation that real hand-over steps depend on.
+  Future<bool> _hasProgressedPastConfirmation(ProviderContainer container) async {
+    final myId = supabase.auth.currentUser?.id;
+    if (myId == null) return false;
+    final repo = container.read(claimsRepositoryProvider);
+    // Claims are always filed against the *found* item by whoever lost it.
+    final foundItemId = match.myItemIsLost ? match.matchedItemId : match.myItemId;
+    final claimantId = match.myItemIsLost ? myId : match.matchedItemUserId;
+    final claim = await repo.fetchClaim(itemId: foundItemId, claimantId: claimantId);
+    if (claim != null) return true;
+    final itemStatus = await repo.fetchItemStatus(foundItemId);
+    return itemStatus == 'claimed' || itemStatus == 'resolved';
+  }
+
+  /// The Undo button shown on an already-decided card.
+  Future<void> _undoDecided(BuildContext context, WidgetRef ref) async {
+    final wasConfirmed = match.status == 'confirmed';
+    if (wasConfirmed) {
+      final ok = await showConfirmDialog(
+        context,
+        icon: Icons.undo,
+        title: 'Undo this confirmation?',
+        message: 'The chat for this match will be hidden for both of you, and the '
+            'match goes back to "Needs your input". Your messages are kept — '
+            'confirming again brings the chat back.',
+        confirmLabel: 'Undo',
+      );
+      if (!ok || !context.mounted) return;
+    }
+    await _revert(
+      container: ProviderScope.containerOf(context),
+      messenger: ScaffoldMessenger.of(context),
+      wasConfirmed: wasConfirmed,
+    );
   }
 
   @override
@@ -171,14 +277,32 @@ class MatchCard extends ConsumerWidget {
                 icon: const Icon(Icons.chat_bubble_outline, size: 18),
                 label: const Text('Message'),
               ),
-            ] else ...[
-              const SizedBox(height: 8),
-              Text(
-                'Dismissed',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w600,
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => _undoDecided(context, ref),
+                  icon: const Icon(Icons.undo, size: 18),
+                  label: const Text('Undo confirmation'),
                 ),
+              ),
+            ] else ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Text(
+                    'Dismissed',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: () => _undoDecided(context, ref),
+                    icon: const Icon(Icons.undo, size: 18),
+                    label: const Text('Undo'),
+                  ),
+                ],
               ),
             ],
           ],
