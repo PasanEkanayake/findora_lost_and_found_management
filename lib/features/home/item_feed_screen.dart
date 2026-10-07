@@ -96,19 +96,38 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
     final isSignedIn = ref.watch(currentUserProvider) != null;
     final isMapView = ref.watch(feedShowsMapProvider);
 
-    final toggleButton = IconButton(
-      icon: Icon(isMapView ? Icons.list_outlined : Icons.map_outlined),
-      tooltip: isMapView ? 'Show list' : 'Show map',
-      onPressed: () => ref.read(feedShowsMapProvider.notifier).setShowsMap(!isMapView),
-      style: IconButton.styleFrom(
-        backgroundColor: Colors.white.withValues(alpha: 0.18),
-        foregroundColor: Colors.white,
-      ),
-    );
+    // The same toggle sits in two different places: over the blue gradient
+    // hero header on the list view (white-on-translucent-white reads fine
+    // there) and in a plain app bar on the map view. The map view's app bar
+    // is the page's light surface colour in light mode, so a white icon on
+    // a faint white wash vanished — it only looked right in dark mode. Each
+    // placement therefore gets its own theme-aware colours.
+    IconButton buildToggleButton({required bool onHero}) => IconButton(
+          icon: Icon(isMapView ? Icons.list_outlined : Icons.map_outlined),
+          tooltip: isMapView ? 'Show list' : 'Show map',
+          onPressed: () => ref.read(feedShowsMapProvider.notifier).setShowsMap(!isMapView),
+          style: onHero
+              ? IconButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.18),
+                  foregroundColor: Colors.white,
+                )
+              : IconButton.styleFrom(
+                  backgroundColor: theme.colorScheme.primaryContainer,
+                  foregroundColor: theme.colorScheme.onPrimaryContainer,
+                ),
+        );
 
     if (isMapView) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Findora'), actions: [toggleButton]),
+        appBar: AppBar(
+          title: const Text('Findora'),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: buildToggleButton(onHero: false),
+            ),
+          ],
+        ),
         body: const ItemsMapView(),
       );
     }
@@ -140,7 +159,12 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
             SliverAppBar(
               pinned: true,
               expandedHeight: 208,
-              actions: [Padding(padding: const EdgeInsets.only(right: 8), child: toggleButton)],
+              actions: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: buildToggleButton(onHero: true),
+                ),
+              ],
               flexibleSpace: FlexibleSpaceBar(
                 background: _HeroHeader(
                   greeting: _greeting,
