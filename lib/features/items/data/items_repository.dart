@@ -181,10 +181,20 @@ class ItemsRepository {
     double? longitude,
     String? locationLabel,
     DateTime? eventTime,
+    bool textChanged = false,
+    List<double>? textEmbedding,
   }) async {
     await supabase.from(AppConstants.itemsTable).update({
       'title': title,
       'description': description,
+      // When the wording changed, the stored text embedding describes the OLD
+      // wording, so it must be replaced — with the fresh one, or with null
+      // when the AI service didn't answer (null makes matching fall back to
+      // comparing the actual words, which beats comparing the old meaning).
+      // Left out entirely when the text didn't change, so an unrelated edit
+      // never throws away a good embedding.
+      if (textChanged)
+        'text_embedding': textEmbedding == null ? null : _pgvectorLiteral(textEmbedding),
       'category_id': categoryId,
       if (latitude != null && longitude != null)
         'location': 'POINT($longitude $latitude)',

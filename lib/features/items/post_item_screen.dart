@@ -43,6 +43,19 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
   String? _detectedLabel;
   double? _detectedConfidence;
 
+  // Whether the Title / Category currently showing were filled in by the
+  // photo analysis (true) or have been typed/picked by the person (false).
+  // Only auto-filled values may be replaced when the first photo changes —
+  // anything the person chose themselves is never overwritten.
+  bool _titleIsAutoFilled = false;
+  bool _categoryIsAutoFilled = false;
+
+  // Bumped for every analysis (and whenever the photo it was for goes away).
+  // An analysis only applies its result if it is still the latest, so a slow
+  // result for a photo that has since been swapped can't land on top of the
+  // newer one.
+  int _suggestionRun = 0;
+
   bool _isLocating = false;
   double? _latitude;
   double? _longitude;
@@ -94,41 +107,90 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
     if (index == 0) _suggestCategoryFromPhoto(file);
   }
 
+  /// Removes the photo at [index]. The first photo is the one the
+  /// suggestions come from, so removing it re-runs the analysis on whichever
+  /// photo is first now — or, with no photos left, drops the suggestion.
+  void _removePhoto(int index) {
+    setState(() => _photos.removeAt(index));
+    if (index != 0) return;
+    if (_photos.isEmpty) {
+      _suggestionRun++; // discard any analysis still running for the old photo
+      setState(() {
+        _isSuggesting = false;
+        _detectedLabel = null;
+        _detectedConfidence = null;
+        _clearAutoFilledFields();
+      });
+    } else {
+      _suggestCategoryFromPhoto(_photos.first);
+    }
+  }
+
+  /// Empties Title/Category, but only if they still hold a value the photo
+  /// analysis put there. Call inside setState.
+  void _clearAutoFilledFields() {
+    if (_titleIsAutoFilled) {
+      _titleController.clear();
+      _titleIsAutoFilled = false;
+    }
+    if (_categoryIsAutoFilled) {
+      _categoryId = null;
+      _categoryIsAutoFilled = false;
+    }
+  }
+
   /// Runs the on-device model on the first photo purely for a live
   /// "Detected: X" suggestion — never blocks the form, and fails silently
   /// (logged via debugPrint) if the model asset isn't in place yet.
+  ///
+  /// Runs again every time the first photo changes. Title and Category are
+  /// refreshed to match the new photo **unless the person has typed/picked
+  /// their own value**: before, they were only ever filled while empty, so
+  /// the first photo's guess stuck even after the photo was swapped.
   Future<void> _suggestCategoryFromPhoto(File file) async {
+    final run = ++_suggestionRun;
     setState(() => _isSuggesting = true);
     try {
       final classifier = await ref.read(tfliteClassifierProvider.future);
       final result = await classifier.classify(file);
-      if (!mounted) return;
+      if (!mounted || run != _suggestionRun) return;
       setState(() {
         _detectedLabel = result.label;
         _detectedConfidence = result.confidence;
       });
 
-      // Only offers a title, never overwrites one already typed — someone
-      // who started typing before the model finished shouldn't have their
-      // words replaced out from under them.
-      if (_titleController.text.trim().isEmpty) {
+      // Fills an empty title, or replaces one the previous analysis filled.
+      // A title the person typed is never touched — including someone who
+      // started typing before the model finished.
+      if (_titleController.text.trim().isEmpty || _titleIsAutoFilled) {
         _titleController.text = _titleCaseFromLabel(result.label);
+        _titleIsAutoFilled = true;
       }
 
-      if (_categoryId == null) {
+      if (_categoryId == null || _categoryIsAutoFilled) {
         final suggestedName = mapImagenetLabelToCategory(result.label);
         final categories = await ref.read(categoriesProvider.future);
-        for (final category in categories) {
-          if (category.name == suggestedName) {
-            if (mounted) setState(() => _categoryId = category.id);
-            break;
+        if (!mounted || run != _suggestionRun) return;
+        // The person may have picked a category while categories loaded.
+        if (_categoryId == null || _categoryIsAutoFilled) {
+          String? suggestedId;
+          for (final category in categories) {
+            if (category.name == suggestedName) {
+              suggestedId = category.id;
+              break;
+            }
           }
+          setState(() {
+            _categoryId = suggestedId;
+            _categoryIsAutoFilled = suggestedId != null;
+          });
         }
       }
     } catch (e) {
       debugPrint('Category suggestion skipped (model not ready?): $e');
     } finally {
-      if (mounted) setState(() => _isSuggesting = false);
+      // Only the latest run owns the spinner.
+      if (mounted && run == _suggestionRun) setState(() => _isSuggesting = false);
     }
   }
 
@@ -192,8 +254,10 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
   /// centered on a reasonable fallback so "adjust manually" still works
   /// without GPS ever having run).
   Future<void> _adjustLocationOnMap() async {
-    final startLat = _latitude ?? 0.0;
-    final startLng = _longitude ?? 0.0;
+    // Null is fine — the picker then finds the device's position itself
+    // rather than opening on (0, 0), which is open ocean.
+    final startLat = _latitude;
+    final startLng = _longitude;
 
     final picked = await Navigator.of(context).push<PickedLocation>(
       MaterialPageRoute(
@@ -357,7 +421,7 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
               PhotoStrip(
                 items: [for (final photo in _photos) PhotoStripItem.local(photo)],
                 onAdd: _addPhoto,
-                onRemove: (i) => setState(() => _photos.removeAt(i)),
+                onRemove: _removePhoto,
                 onReplace: _replacePhoto,
               ),
               const SizedBox(height: 8),
@@ -381,6 +445,10 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
               TextFormField(
                 controller: _titleController,
                 decoration: const InputDecoration(labelText: 'Title'),
+                // onChanged only fires for the person's own typing, not for
+                // the analysis setting .text — so this is what tells the two
+                // apart.
+                onChanged: (_) => _titleIsAutoFilled = false,
                 validator: (v) =>
                     (v == null || v.trim().isEmpty) ? 'A title is required' : null,
               ),
@@ -416,7 +484,10 @@ class _PostItemScreenState extends ConsumerState<PostItemScreen> {
                   items: categories
                       .map((c) => DropdownMenuItem(value: c.id, child: Text(c.name)))
                       .toList(),
-                  onChanged: (value) => setState(() => _categoryId = value),
+                  onChanged: (value) => setState(() {
+                    _categoryId = value;
+                    _categoryIsAutoFilled = false;
+                  }),
                 ),
               ),
               const SizedBox(height: 16),

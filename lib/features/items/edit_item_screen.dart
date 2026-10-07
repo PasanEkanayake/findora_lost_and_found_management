@@ -58,6 +58,9 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
   void initState() {
     super.initState();
     _loadPhotos();
+    // Wakes the optional text-embedding service while the form is open, so
+    // it can answer in time when a changed title/description is saved.
+    ref.read(textEmbeddingServiceProvider).warmUp();
     _titleController = TextEditingController(text: widget.item.title);
     _descriptionController = TextEditingController(text: widget.item.description ?? '');
     _categoryId = widget.item.categoryId;
@@ -178,8 +181,10 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
   }
 
   Future<void> _adjustLocationOnMap() async {
-    final startLat = _latitude ?? 0.0;
-    final startLng = _longitude ?? 0.0;
+    // Null is fine — the picker then finds the device's position itself
+    // rather than opening on (0, 0), which is open ocean.
+    final startLat = _latitude;
+    final startLng = _longitude;
 
     final picked = await Navigator.of(context).push<PickedLocation>(
       MaterialPageRoute(
@@ -228,16 +233,30 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
     // 1) The details. Done first: if this fails nothing else has changed,
     //    so "try again" is always safe.
     try {
+      final title = _titleController.text.trim();
+      final description =
+          _descriptionController.text.trim().isEmpty ? null : _descriptionController.text.trim();
+      // The text embedding describes the title+description, so it is only
+      // out of date if one of them actually changed.
+      final textChanged =
+          title != widget.item.title || (description ?? '') != (widget.item.description ?? '').trim();
+      final textEmbedding = textChanged
+          ? await ref
+              .read(textEmbeddingServiceProvider)
+              .tryEmbed(title: title, description: description)
+          : null;
+
       await repo.updateItem(
         itemId: widget.item.id,
-        title: _titleController.text.trim(),
-        description:
-            _descriptionController.text.trim().isEmpty ? null : _descriptionController.text.trim(),
+        title: title,
+        description: description,
         categoryId: _categoryId,
         latitude: _latitude,
         longitude: _longitude,
         locationLabel: _locationLabel,
         eventTime: _eventTime,
+        textChanged: textChanged,
+        textEmbedding: textEmbedding,
       );
     } catch (_) {
       _showMessage("Couldn't save changes. Try again.", isError: true);

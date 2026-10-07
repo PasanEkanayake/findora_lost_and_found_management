@@ -265,7 +265,9 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
                           body: 'Try a different filter, or "All" to see every match again.',
                         )
                       : ListView(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                          // Bottom room so the last card's buttons can scroll clear of the
+                          // floating "Report item" button.
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
                           children: [
                             if (pending.isNotEmpty) ...[
                               Text('Needs your input',

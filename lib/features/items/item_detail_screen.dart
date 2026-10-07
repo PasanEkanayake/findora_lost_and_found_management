@@ -262,6 +262,7 @@ class _ContactBar extends ConsumerWidget {
         '/contact-chat',
         extra: ContactChatArgs(
           threadId: threadId,
+          itemId: item.id,
           itemTitle: item.title,
           otherUserName: item.posterName ?? 'Findora user',
         ),
