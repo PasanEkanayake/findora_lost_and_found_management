@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/supabase/supabase_client.dart';
+import '../../core/widgets/post_link_bar.dart';
 import 'data/contact_message_model.dart';
 import 'data/contact_providers.dart';
 
@@ -12,11 +13,15 @@ import 'data/contact_providers.dart';
 class ContactChatArgs {
   const ContactChatArgs({
     required this.threadId,
+    required this.itemId,
     required this.itemTitle,
     required this.otherUserName,
   });
 
   final String threadId;
+
+  /// The post this thread is about — lets the chat link straight to it.
+  final String itemId;
   final String itemTitle;
   final String otherUserName;
 }
@@ -101,24 +106,20 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
     });
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.args.otherUserName),
-        // Reminds either side what this thread is actually about — unlike
-        // ChatScreen, where the item is implied by the confirmed match.
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(22),
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              'About "${widget.args.itemTitle}"',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ),
-        ),
-      ),
+      appBar: AppBar(title: Text(widget.args.otherUserName)),
       body: Column(
         children: [
+          // What this thread is about — replaces the old "About ..." caption
+          // under the title, and opens the post when tapped.
+          PostLinkBar(
+            posts: [
+              ChatPostLink(
+                caption: 'ABOUT THIS POST',
+                itemId: widget.args.itemId,
+                fallbackTitle: widget.args.itemTitle,
+              ),
+            ],
+          ),
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
