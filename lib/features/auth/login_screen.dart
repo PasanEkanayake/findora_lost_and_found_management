@@ -88,6 +88,9 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         backgroundColor: theme.colorScheme.error,
         duration: const Duration(seconds: 8),
+        // Has an action, so it would otherwise persist forever — see
+        // MatchCard._act for the explanation.
+        persist: false,
         action: SnackBarAction(
           label: 'Resend',
           onPressed: _resendConfirmationEmail,
