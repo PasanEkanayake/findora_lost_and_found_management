@@ -274,6 +274,7 @@ class _ContactThreadTile extends StatelessWidget {
           '/contact-chat',
           extra: ContactChatArgs(
             threadId: thread.threadId,
+            itemId: thread.itemId,
             itemTitle: thread.itemTitle,
             otherUserName: thread.otherUserName,
           ),
