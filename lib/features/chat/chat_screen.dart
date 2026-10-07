@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import '../../core/supabase/supabase_client.dart';
+import '../../core/widgets/post_link_bar.dart';
 import '../items/data/claims_providers.dart';
 import '../items/data/items_providers.dart';
 import '../matches/data/matches_providers.dart';
@@ -142,6 +143,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       appBar: AppBar(title: Text(widget.args.otherItemTitle)),
       body: Column(
         children: [
+          // The two posts this match is between — tap either to open it.
+          PostLinkBar(
+            posts: [
+              ChatPostLink(
+                caption: 'YOUR POST',
+                itemId: widget.args.myItemId,
+                fallbackTitle: 'Your post',
+              ),
+              ChatPostLink(
+                caption: 'THEIR POST',
+                itemId: widget.args.matchedItemId,
+                fallbackTitle: widget.args.otherItemTitle,
+              ),
+            ],
+          ),
           ref.watch(chatLifecycleProvider(_lifecycleParams)).when(
                 loading: () => const SizedBox.shrink(),
                 error: (_, __) => const SizedBox.shrink(),
