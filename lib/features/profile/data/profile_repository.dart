@@ -21,15 +21,63 @@ class ProfileRepository {
         .select()
         .eq('id', userId)
         .single();
-    return ProfileModel.fromMap(row);
+    // Phone number and push token live in their own owner-only table
+    // (supabase/17_harden_policies.sql). No row yet = nothing saved yet.
+    // If the table isn't there (migration not applied) the profile still
+    // loads, just without a phone number.
+    Map<String, dynamic>? private;
+    try {
+      private = await supabase
+          .from(AppConstants.profilePrivateTable)
+          .select('phone')
+          .eq('id', userId)
+          .maybeSingle();
+    } catch (_) {
+      private = null;
+    }
+    return ProfileModel.fromMap({...row, ...?private});
   }
 
   Future<void> updateProfile({String? fullName, String? phone}) async {
     final userId = supabase.auth.currentUser!.id;
+    if (fullName != null) {
+      await supabase
+          .from(AppConstants.profilesTable)
+          .update({'full_name': fullName}).eq('id', userId);
+    }
+    if (phone != null) {
+      // Upsert: first-time savers have no profile_private row yet. An empty
+      // string clears the number.
+      await supabase.from(AppConstants.profilePrivateTable).upsert({
+        'id': userId,
+        'phone': phone.isEmpty ? null : phone,
+      });
+    }
+  }
+
+  /// Browse another country's posts for [days] days (1–30), after which the
+  /// home country comes back by itself. The database enforces the limits.
+  Future<void> setTemporaryCountry(String countryCode, int days) async {
     await supabase.from(AppConstants.profilesTable).update({
-      if (fullName != null) 'full_name': fullName,
-      if (phone != null) 'phone': phone,
-    }).eq('id', userId);
+      'temp_country_code': countryCode,
+      'temp_country_until': DateTime.now().toUtc().add(Duration(days: days)).toIso8601String(),
+    }).eq('id', supabase.auth.currentUser!.id);
+  }
+
+  Future<void> clearTemporaryCountry() async {
+    await supabase.from(AppConstants.profilesTable).update({
+      'temp_country_code': null,
+      'temp_country_until': null,
+    }).eq('id', supabase.auth.currentUser!.id);
+  }
+
+  /// Saves the HOME country (where this person lives). Changing it again is
+  /// limited to once every 30 days — the database refuses earlier changes with
+  /// a message saying when the next one is possible.
+  Future<void> updateCountry(String countryCode) async {
+    await supabase
+        .from(AppConstants.profilesTable)
+        .update({'country_code': countryCode}).eq('id', supabase.auth.currentUser!.id);
   }
 
   /// Uploads to the `avatars` bucket under `{user_id}/...` (matching the
@@ -66,10 +114,12 @@ class ProfileRepository {
         .toList();
   }
 
-  /// Calls request_account_deletion() (supabase/09_account_deletion.sql)
-  /// — see that function's own doc for exactly what it does (soft-deletes
-  /// their items, scrubs personal fields, blocks future sign-in) and why
-  /// it's not a real `delete from auth.users`. Doesn't sign the caller
+  /// Calls request_account_deletion() (supabase/09_account_deletion.sql,
+  /// redefined in 16_release_email_on_delete.sql) — see those files for
+  /// exactly what it does (soft-deletes their items, scrubs personal
+  /// fields, anonymises the auth row so the email can be used again after
+  /// a cooldown, blocks future sign-in) and why it's not a real
+  /// `delete from auth.users`. Doesn't sign the caller
   /// out itself — ProfileScreen does that right after this returns, so
   /// the current session ends immediately rather than lingering until
   /// the ban takes effect on next token refresh.
