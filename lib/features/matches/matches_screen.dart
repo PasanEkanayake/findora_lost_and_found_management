@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../chat/data/safety_providers.dart';
 import '../items/data/items_providers.dart';
 import '../../core/ml/tflite_classifier.dart';
 import '../../core/ml/tflite_provider.dart';
@@ -8,6 +9,7 @@ import '../../core/widgets/shimmer_list.dart';
 import 'data/match_model.dart';
 import 'data/matches_providers.dart';
 import 'widgets/match_card.dart';
+import 'widgets/match_legend.dart';
 
 /// Narrows the match list by which signal(s) actually contributed to it.
 ///
@@ -37,8 +39,10 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
   _MatchFilter _filter = _MatchFilter.all;
 
   bool _passesFilter(MatchModel match) {
-    final hasImage = match.imageSimilarity != null;
-    final hasText = match.textSimilarity != null && match.textSimilarity! >= 0.5;
+    // "Agrees", not "exists": every pair with photos on both sides now has a
+    // photo score, low or not (see supabase/18_calibrated_match_score.sql).
+    final hasImage = match.photosAgree;
+    final hasText = match.wordingAgrees;
     switch (_filter) {
       case _MatchFilter.all:
         return true;
@@ -171,6 +175,11 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
         title: const Text('Matches for you'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: 'What do the match labels mean?',
+            onPressed: () => showMatchLegendSheet(context),
+          ),
+          IconButton(
             icon: const Icon(Icons.image_search),
             tooltip: 'Scan my photos for matches',
             onPressed: _isScanning ? null : () => _scan(manual: true),
@@ -205,8 +214,19 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
               );
             }
 
-            final matches = allMatches.where(_passesFilter).toList();
-            final pending = matches.where((m) => m.status == 'pending').toList();
+            // Matches with someone I've blocked are hidden too.
+            final blocked = ref.watch(blockedUserIdsProvider).value ?? const <String>{};
+            final matches = allMatches
+                .where((m) => !blocked.contains(m.matchedItemUserId))
+                .where(_passesFilter)
+                .toList();
+            // Best evidence first; ties keep the server's newest-first order
+            // (List.sort isn't stable, so break ties explicitly).
+            final pending = matches.where((m) => m.status == 'pending').toList()
+              ..sort((a, b) {
+                final byScore = b.similarityScore.compareTo(a.similarityScore);
+                return byScore != 0 ? byScore : b.createdAt.compareTo(a.createdAt);
+              });
             final decided = matches.where((m) => m.status != 'pending').toList();
 
             return Column(
@@ -269,6 +289,7 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
                           // floating "Report item" button.
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
                           children: [
+                            const MatchLegendCard(),
                             if (pending.isNotEmpty) ...[
                               Text('Needs your input',
                                   style: Theme.of(context).textTheme.titleSmall),
