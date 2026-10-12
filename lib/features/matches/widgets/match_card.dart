@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../chat/chat_screen.dart';
+import '../../../core/errors/friendly_error.dart';
 import '../../../core/supabase/supabase_client.dart';
 import '../../../core/widgets/confirm_dialog.dart';
 import '../../../core/widgets/item_photo.dart';
@@ -78,9 +79,11 @@ class MatchCard extends ConsumerWidget {
             ),
           ),
         );
-    } catch (_) {
+    } catch (e) {
       messenger.showSnackBar(
-        const SnackBar(content: Text("Couldn't update this match. Try again.")),
+        SnackBar(
+          content: Text(friendlyDatabaseError(e, fallback: "Couldn't update this match. Try again.")),
+        ),
       );
     }
   }
@@ -114,9 +117,11 @@ class MatchCard extends ConsumerWidget {
         ..showSnackBar(
           const SnackBar(content: Text('Undone — this match is back under "Needs your input".')),
         );
-    } catch (_) {
+    } catch (e) {
       messenger.showSnackBar(
-        const SnackBar(content: Text("Couldn't undo that. Try again.")),
+        SnackBar(
+          content: Text(friendlyDatabaseError(e, fallback: "Couldn't undo that. Try again.")),
+        ),
       );
     }
   }
@@ -177,12 +182,22 @@ class MatchCard extends ConsumerWidget {
               children: [
                 Icon(Icons.auto_awesome, size: 16, color: theme.colorScheme.primary),
                 const SizedBox(width: 6),
+                // Lead with the tier ("Strong match"); the number is an evidence
+                // score, not a probability, so it follows more quietly.
                 Text(
-                  '${(match.similarityScore * 100).round()}% match',
+                  '${match.tier.label} match',
                   style: theme.textTheme.titleSmall?.copyWith(
-                    color: theme.colorScheme.primary,
+                    color: match.tier == MatchTier.possible
+                        ? theme.colorScheme.onSurfaceVariant
+                        : theme.colorScheme.primary,
                     fontWeight: FontWeight.w700,
                   ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '${(match.similarityScore * 100).round()}%',
+                  style: theme.textTheme.labelMedium
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
                 const Spacer(),
                 Text(
@@ -449,9 +464,22 @@ class _ScoreBreakdown extends StatelessWidget {
       parts.add('🕐 ${_approxHoursApartLabel(match.timeProximity!)}');
     }
 
-    return Text(
-      parts.join('  ·  '),
-      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+    // Say out loud what the photo signal means, since a missing or low photo
+    // score is exactly what keeps a match from reading as "Strong".
+    String? note;
+    if (match.imageSimilarity == null) {
+      note = 'No photo comparison available';
+    } else if (!match.photosAgree) {
+      note = '⚠ The photos look different — check carefully';
+    }
+
+    final muted = theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(parts.join('  ·  '), style: muted),
+        if (note != null) Text(note, style: muted),
+      ],
     );
   }
 }
