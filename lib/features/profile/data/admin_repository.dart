@@ -1,6 +1,7 @@
 import '../../../core/constants/app_constants.dart';
 import '../../../core/supabase/supabase_client.dart';
 import 'report_model.dart';
+import 'user_report_model.dart';
 
 /// Only usable if RLS considers the caller an admin (profiles.is_admin) —
 /// see the "admins can view all reports" / "admins can update any item"
@@ -16,6 +17,26 @@ class AdminRepository {
         .eq('status', 'open')
         .order('created_at', ascending: false);
     return rows.map(ReportModel.fromMap).toList();
+  }
+
+  Future<List<UserReportModel>> fetchOpenUserReports() async {
+    final rows = await supabase
+        .from(AppConstants.userReportsTable)
+        .select(
+          '*, reported:profiles!user_reports_reported_user_id_fkey(full_name, username), '
+          'reporter:profiles!user_reports_reporter_id_fkey(full_name, username)',
+        )
+        .eq('status', 'open')
+        .order('created_at', ascending: false);
+    return rows.map(UserReportModel.fromMap).toList();
+  }
+
+  /// [status] is 'reviewed' (acted on) or 'dismissed' (no action needed).
+  Future<void> resolveUserReport(String reportId, {required String status}) async {
+    await supabase
+        .from(AppConstants.userReportsTable)
+        .update({'status': status})
+        .eq('id', reportId);
   }
 
   Future<void> dismissReport(String reportId) async {
