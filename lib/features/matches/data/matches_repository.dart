@@ -45,10 +45,15 @@ class MatchesRepository {
     ];
   }
 
+  /// Confirms, dismisses or (Undo) re-opens a match. Goes through the
+  /// `decide_match()` function (supabase/17_harden_policies.sql) — clients
+  /// have no direct write access to `matches` any more — which checks that
+  /// the caller owns one side and refuses to un-confirm a match once a claim
+  /// exists.
   Future<void> updateStatus(String matchId, String status) async {
-    await supabase
-        .from(AppConstants.matchesTable)
-        .update({'status': status})
-        .eq('id', matchId);
+    await supabase.rpc('decide_match', params: {
+      'p_match_id': matchId,
+      'p_status': status,
+    });
   }
 }
