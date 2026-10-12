@@ -11,7 +11,10 @@ class ProfileModel {
     this.fullName,
     this.avatarUrl,
     this.phone,
-    this.fcmToken,
+    this.countryCode,
+    this.tempCountryCode,
+    this.tempCountryUntil,
+    this.countryChangedAt,
   });
 
   final String id;
@@ -19,7 +22,34 @@ class ProfileModel {
   final String? fullName;
   final String? avatarUrl;
   final String? phone;
-  final String? fcmToken;
+
+  /// The country whose posts this person sees in Browse (ISO code), or null
+  /// if they haven't chosen one (the phone's region is used meanwhile).
+  final String? countryCode;
+
+  /// "Travelling" mode: browse another country's posts until [tempCountryUntil],
+  /// then the home country comes back by itself.
+  final String? tempCountryCode;
+  final DateTime? tempCountryUntil;
+
+  /// When the home country was last changed (the 30-day limit counts from here).
+  final DateTime? countryChangedAt;
+
+  /// The temporary country, only while it hasn't expired.
+  String? get activeTempCountry {
+    final until = tempCountryUntil;
+    if (tempCountryCode == null || until == null) return null;
+    return until.isAfter(DateTime.now()) ? tempCountryCode : null;
+  }
+
+  /// The earliest moment the home country can be changed again, or null if it
+  /// can be changed now.
+  DateTime? get nextCountryChangeAt {
+    final changed = countryChangedAt;
+    if (changed == null) return null;
+    final next = changed.add(const Duration(days: 30));
+    return next.isAfter(DateTime.now()) ? next : null;
+  }
   final double rating;
   final int ratingCount;
   final bool isAdmin;
@@ -31,7 +61,14 @@ class ProfileModel {
       fullName: map['full_name'] as String?,
       avatarUrl: map['avatar_url'] as String?,
       phone: map['phone'] as String?,
-      fcmToken: map['fcm_token'] as String?,
+      countryCode: map['country_code'] as String?,
+      tempCountryCode: map['temp_country_code'] as String?,
+      tempCountryUntil: map['temp_country_until'] == null
+          ? null
+          : DateTime.parse(map['temp_country_until'] as String),
+      countryChangedAt: map['country_changed_at'] == null
+          ? null
+          : DateTime.parse(map['country_changed_at'] as String),
       rating: (map['rating'] as num).toDouble(),
       ratingCount: (map['rating_count'] as num).toInt(),
       isAdmin: map['is_admin'] as bool? ?? false,
