@@ -6,6 +6,12 @@ class AppConstants {
 
   // Postgres tables
   static const String profilesTable = 'profiles';
+  // Phone number + push token: owner-only, split out of `profiles` by
+  // supabase/17_harden_policies.sql so other people's API calls can't read them.
+  static const String profilePrivateTable = 'profile_private';
+  // A found item's expected proof-of-ownership answer — owner-only
+  // (supabase/24_proof_questions.sql).
+  static const String itemPrivateTable = 'item_private';
   static const String categoriesTable = 'categories';
   static const String itemsTable = 'items';
   static const String itemImagesTable = 'item_images';
@@ -14,6 +20,8 @@ class AppConstants {
   static const String contactMessagesTable = 'contact_messages';
   static const String claimsTable = 'claims';
   static const String reportsTable = 'reports';
+  static const String userBlocksTable = 'user_blocks';
+  static const String userReportsTable = 'user_reports';
   static const String ratingsTable = 'ratings';
   static const String notificationsTable = 'notifications';
 
