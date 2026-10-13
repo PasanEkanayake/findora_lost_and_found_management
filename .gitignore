@@ -12,7 +12,11 @@
 .swiftpm/
 migrate_working_dir/
 .env
-.env.example
+
+# Service-account keys (Firebase Admin SDK etc.) — NEVER commit these. They
+# belong in Supabase Edge Function secrets only.
+*-firebase-adminsdk-*.json
+*service-account*.json
 
 # IntelliJ related
 *.iml
@@ -53,3 +57,4 @@ app.*.map.json
 android/app/google-services.json
 android/app/src/main/AndroidManifest.xml
 findora-91c1b-firebase-adminsdk-fbsvc-19b42e6399.json
+.env.example
