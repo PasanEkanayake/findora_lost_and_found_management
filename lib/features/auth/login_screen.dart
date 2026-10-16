@@ -53,6 +53,15 @@ class _LoginScreenState extends State<LoginScreen> {
     } on AuthException catch (e) {
       if (_isEmailNotConfirmedError(e)) {
         _showEmailNotConfirmedMessage();
+      } else if (e.message.toLowerCase().contains('banned')) {
+        // Raw GoTrue text is "User is banned". Deleted accounts no longer
+        // reach this (their email is released, so they just fail as an
+        // unknown login) — this is for accounts suspended by an admin.
+        _showMessage(
+          'This account is no longer active. If you think this is a mistake, '
+          'contact support.',
+          isError: true,
+        );
       } else {
         _showMessage(e.message, isError: true);
       }
