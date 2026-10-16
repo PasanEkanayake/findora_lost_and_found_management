@@ -71,11 +71,21 @@ class ItemPhoto extends StatelessWidget {
     required this.url,
     this.fit = BoxFit.cover,
     this.showLabel = false,
+    this.semanticLabel,
+    this.cacheWidth,
   });
 
   final String? url;
   final BoxFit fit;
   final bool showLabel;
+
+  /// What a screen reader says for this photo (e.g. "Photo of Black wallet").
+  final String? semanticLabel;
+
+  /// Decode the image no wider than this many pixels. Small thumbnails in
+  /// lists don't need a full-size bitmap in memory; leave null for photos
+  /// shown at full size.
+  final int? cacheWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -85,11 +95,17 @@ class ItemPhoto extends StatelessWidget {
     }
 
     final surface = Theme.of(context).colorScheme.surfaceContainerHighest;
-    return CachedNetworkImage(
-      imageUrl: imageUrl,
-      fit: fit,
-      placeholder: (context, url) => Container(color: surface),
-      errorWidget: (context, url, error) => ItemPhotoPlaceholder(showLabel: showLabel),
+    return Semantics(
+      image: true,
+      label: semanticLabel ?? 'Photo',
+      excludeSemantics: true,
+      child: CachedNetworkImage(
+        imageUrl: imageUrl,
+        fit: fit,
+        memCacheWidth: cacheWidth,
+        placeholder: (context, url) => Container(color: surface),
+        errorWidget: (context, url, error) => ItemPhotoPlaceholder(showLabel: showLabel),
+      ),
     );
   }
 }
