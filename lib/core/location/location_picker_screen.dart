@@ -7,11 +7,20 @@ import 'current_location.dart';
 /// Result of manually adjusting a pin — always returned together so callers
 /// never end up with coordinates and a label that disagree.
 class PickedLocation {
-  const PickedLocation({required this.latitude, required this.longitude, required this.label});
+  const PickedLocation({
+    required this.latitude,
+    required this.longitude,
+    required this.label,
+    this.countryCode,
+  });
 
   final double latitude;
   final double longitude;
   final String label;
+
+  /// ISO country code of the pin, when the phone's geocoder could tell
+  /// (null if offline or unknown) — used to pre-fill the post's Country.
+  final String? countryCode;
 }
 
 /// Lets the person drag the map to fine-tune exactly where a pin sits,
@@ -66,6 +75,9 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   bool _noStartingPoint = false;
   bool _isMoving = false;
   bool _isConfirming = false;
+  bool _isSearching = false;
+  bool _searched = false; // a place search already chose the starting point
+  final _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -86,6 +98,12 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     final position = await getCurrentPositionOrNull()
         .timeout(const Duration(seconds: 10), onTimeout: () => null);
     if (!mounted) return;
+    // Someone who typed a place while we were still waiting for the GPS has
+    // already chosen where to start — don't yank the map away from it.
+    if (_searched) {
+      setState(() => _isLocating = false);
+      return;
+    }
     setState(() {
       _isLocating = false;
       if (position != null) {
@@ -98,6 +116,48 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         _noStartingPoint = true;
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// Finds a place by name or address (the phone's own geocoder — no API key)
+  /// and moves the map there. The person still drags the pin to the exact
+  /// spot afterwards.
+  Future<void> _searchPlace(String query) async {
+    final text = query.trim();
+    if (text.isEmpty || _isSearching) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _isSearching = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      // geocoding 5.x: instance methods on Geocoding (see the note in pubspec.yaml).
+      final results = await Geocoding().locationFromAddress(text);
+      if (!mounted) return;
+      if (results.isEmpty) {
+        messenger.showSnackBar(SnackBar(content: Text('No place found for "$text".')));
+        return;
+      }
+      final target = LatLng(results.first.latitude, results.first.longitude);
+      _searched = true;
+      _center = target;
+      if (_mapController != null) {
+        _mapController!.animateCamera(CameraUpdate.newLatLngZoom(target, 16));
+      } else {
+        // The map isn't on screen yet (still waiting for the GPS): start it here.
+        setState(() => _zoom = 16);
+      }
+      setState(() => _noStartingPoint = false);
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Couldn't search right now. Check your connection.")),
+      );
+    } finally {
+      if (mounted) setState(() => _isSearching = false);
+    }
   }
 
   /// The "my location" button: recentres the map on the device.
@@ -128,6 +188,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     setState(() => _isConfirming = true);
 
     var label = 'Pinned location';
+    String? countryCode;
     try {
       // geocoding 5.x replaced the old top-level placemarkFromCoordinates()
       // function with an instance method on the Geocoding class.
@@ -137,6 +198,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       );
       if (placemarks.isNotEmpty) {
         final p = placemarks.first;
+        countryCode = p.isoCountryCode?.toUpperCase();
         label = [p.street, p.locality]
             .where((part) => part != null && part.isNotEmpty)
             .join(', ');
@@ -151,7 +213,12 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     setState(() => _isConfirming = false);
 
     Navigator.of(context).pop(
-      PickedLocation(latitude: center.latitude, longitude: center.longitude, label: label),
+      PickedLocation(
+        latitude: center.latitude,
+        longitude: center.longitude,
+        label: label,
+        countryCode: countryCode,
+      ),
     );
   }
 
@@ -165,6 +232,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       appBar: AppBar(
         title: const Text('Adjust location'),
         leading: IconButton(
+          tooltip: 'Close',
           icon: const Icon(Icons.close),
           onPressed: () => Navigator.of(context).pop(),
         ),
@@ -188,7 +256,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
               // turning this on without permission can error on Android.
               myLocationEnabled: _hasDeviceFix,
             ),
-          if (_isLocating)
+          if (_isLocating && !_searched)
             const Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -233,7 +301,36 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
             top: 16,
             left: 16,
             right: 16,
-            child: Card(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Card(
+                  child: TextField(
+                    controller: _searchController,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: _searchPlace,
+                    decoration: InputDecoration(
+                      hintText: 'Search for a place or address',
+                      prefixIcon: const Icon(Icons.search),
+                      border: InputBorder.none,
+                      suffixIcon: _isSearching
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
+                          : IconButton(
+                              tooltip: 'Search',
+                              icon: const Icon(Icons.arrow_forward),
+                              onPressed: () => _searchPlace(_searchController.text),
+                            ),
+                    ),
+                  ),
+                ),
+                Card(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 child: Row(
@@ -255,6 +352,8 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                   ],
                 ),
               ),
+            ),
+              ],
             ),
           ),
 
