@@ -1,8 +1,8 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import '../constants/app_constants.dart';
 import '../router/app_router.dart' show rootRouter;
 import '../supabase/supabase_client.dart';
 import '../../features/notifications/data/notifications_repository.dart';
@@ -123,15 +123,50 @@ Future<void> registerPushTokenForCurrentUser() async {
 Future<void> _saveToken(String token) async {
   final userId = supabase.auth.currentUser?.id;
   if (userId == null) return;
-  await supabase.from(AppConstants.profilesTable).update({'fcm_token': token}).eq('id', userId);
+  // One row per device (supabase/21_device_tokens.sql). The function moves the
+  // token over if another account was last signed in on this phone.
+  await supabase.rpc('register_device_token', params: {
+    'p_token': token,
+    'p_platform': defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+  });
 }
 
-/// Clears this user's stored FCM token — used by the "push notifications"
-/// toggle in NotificationSettingsScreen. Doesn't revoke the OS-level
-/// permission (apps can't do that for the user), it just stops this
-/// profile from being a valid target for a future server-side push send.
+/// Removes THIS device's push token — used by the "push notifications"
+/// toggle in NotificationSettingsScreen, and on sign-out so a phone that is
+/// no longer signed in stops receiving that person's notifications. Doesn't
+/// revoke the OS-level permission (apps can't do that for the user), it just
+/// stops this profile from being a valid target for a future server-side
+/// push send.
+///
+/// Must run while still signed in (the write is the signed-in user's own),
+/// i.e. BEFORE `auth.signOut()`. Never throws: a failure here must not stop
+/// someone signing out.
 Future<void> clearPushToken() async {
-  final userId = supabase.auth.currentUser?.id;
-  if (userId == null) return;
-  await supabase.from(AppConstants.profilesTable).update({'fcm_token': null}).eq('id', userId);
+  if (supabase.auth.currentUser == null) return;
+  try {
+    final token = await FirebaseMessaging.instance.getToken();
+    if (token == null) return;
+    // Removes only THIS device — the person's other phones keep working.
+    await supabase.rpc('unregister_device_token', params: {'p_token': token});
+  } catch (e) {
+    debugPrint('Could not clear push token: $e');
+  }
 }
+
+/// Whether THIS phone is currently registered to receive the signed-in
+/// person's push notifications (drives the switch in notification settings).
+/// Per device, not per account: the same person may be signed in elsewhere.
+final thisDeviceRegisteredProvider = FutureProvider.autoDispose<bool>((ref) async {
+  try {
+    final token = await FirebaseMessaging.instance.getToken();
+    if (token == null) return false;
+    final rows = await supabase
+        .from('device_tokens')
+        .select('token')
+        .eq('token', token)
+        .limit(1);
+    return rows.isNotEmpty;
+  } catch (_) {
+    return false;
+  }
+});
