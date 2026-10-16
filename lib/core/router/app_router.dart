@@ -33,6 +33,9 @@ import '../../features/profile/help_support_screen.dart';
 import '../../features/profile/privacy_policy_screen.dart';
 import '../../features/profile/ratings_screen.dart';
 import '../../features/profile/returned_items_screen.dart';
+import '../../features/profile/blocked_users_screen.dart';
+import '../../features/profile/country_settings_screen.dart';
+import '../../features/profile/data_export_screen.dart';
 import '../../features/profile/safety_guidelines_screen.dart';
 import '../../features/profile/user_manual_screen.dart';
 
@@ -172,6 +175,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/profile/safety',
         builder: (context, state) => const SafetyGuidelinesScreen(),
+      ),
+      GoRoute(
+        path: '/profile/blocked',
+        builder: (context, state) => const BlockedUsersScreen(),
+      ),
+      GoRoute(
+        path: '/profile/country',
+        builder: (context, state) => const CountrySettingsScreen(),
+      ),
+      GoRoute(
+        path: '/profile/export',
+        builder: (context, state) => const DataExportScreen(),
       ),
       GoRoute(
         path: '/profile/help',
