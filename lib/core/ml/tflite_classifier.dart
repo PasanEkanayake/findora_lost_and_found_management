@@ -10,12 +10,21 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import '../constants/app_constants.dart';
 
 /// Result of running the on-device model on one photo.
+/// One of the model's best guesses for what is in a photo.
+typedef LabelGuess = ({String label, double confidence});
+
 class ClassificationResult {
   const ClassificationResult({
     required this.embedding,
     required this.label,
     required this.confidence,
+    this.alternatives = const [],
   });
+
+  /// The model's top few guesses, best first (includes [label] as the first
+  /// entry). Lets the UI offer a short list to pick from when the best guess
+  /// alone isn't confident enough to act on.
+  final List<LabelGuess> alternatives;
 
   /// The 1280-d pooled feature vector — this is what gets uploaded to
   /// Supabase and compared via pgvector for AI matching.
@@ -146,21 +155,28 @@ class TfliteClassifier {
 
     var label = 'unknown';
     var confidence = 0.0;
+    final alternatives = <LabelGuess>[];
     if (classIndex != null && _classCount > 0) {
       final probabilities = classOutput[0];
-      var bestIndex = 0;
-      var bestScore = probabilities[0];
-      for (var i = 1; i < probabilities.length; i++) {
-        if (probabilities[i] > bestScore) {
-          bestScore = probabilities[i];
-          bestIndex = i;
-        }
+      // Top 3 by probability (a simple pass is plenty for ~1000 classes).
+      final ranked = List<int>.generate(probabilities.length, (i) => i)
+        ..sort((a, b) => probabilities[b].compareTo(probabilities[a]));
+      for (final index in ranked.take(3)) {
+        alternatives.add((
+          label: index < _labels.length ? _labels[index] : 'unknown',
+          confidence: probabilities[index],
+        ));
       }
-      label = bestIndex < _labels.length ? _labels[bestIndex] : 'unknown';
-      confidence = bestScore;
+      label = alternatives.first.label;
+      confidence = alternatives.first.confidence;
     }
 
-    return ClassificationResult(embedding: embedding, label: label, confidence: confidence);
+    return ClassificationResult(
+      embedding: embedding,
+      label: label,
+      confidence: confidence,
+      alternatives: alternatives,
+    );
   }
 
   List<List<List<double>>> _rgbToTensor(Uint8List rgb) {
