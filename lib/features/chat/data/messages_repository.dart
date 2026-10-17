@@ -8,6 +8,10 @@ import '../../../core/supabase/supabase_client.dart';
 import 'conversation_model.dart';
 import 'message_model.dart';
 
+/// How many messages a conversation loads at a time. A new chat screen shows
+/// the latest [kChatPageSize]; "Load earlier messages" fetches the page before.
+const int kChatPageSize = 50;
+
 /// See ContactRepository's `_LiveThread` — same idea, keyed by match id.
 class _LiveConversation {
   const _LiveConversation({required this.upsert, required this.syncNewer});
@@ -28,6 +32,24 @@ class MessagesRepository {
     return (rows as List<dynamic>)
         .map((row) => ConversationModel.fromMap(row as Map<String, dynamic>))
         .toList();
+  }
+
+  /// Fetches the page of messages BEFORE [before] and merges them into the
+  /// live conversation. Returns how many came back (fewer than
+  /// [kChatPageSize] means there is nothing earlier left).
+  Future<int> loadEarlierMessages(String matchId, DateTime before) async {
+    final rows = await supabase
+        .from(AppConstants.messagesTable)
+        .select()
+        .eq('match_id', matchId)
+        .lt('created_at', before.toUtc().toIso8601String())
+        .order('created_at', ascending: false)
+        .limit(kChatPageSize);
+    final live = _liveConversations[matchId];
+    for (final row in rows) {
+      live?.upsert(row);
+    }
+    return rows.length;
   }
 
   /// Same reasoning and pattern as ContactRepository.streamMessages — see
@@ -61,7 +83,9 @@ class MessagesRepository {
             .from(AppConstants.messagesTable)
             .select()
             .eq('match_id', matchId)
-            .order('created_at');
+            // The NEWEST page only; older messages load on request.
+            .order('created_at', ascending: false)
+            .limit(kChatPageSize);
         // See ContactRepository.streamMessages' identical comment: merge
         // via upsert() (not a clear-and-replace) plus a final sort, so a
         // realtime event landing before this fetch resolves can't get
