@@ -33,6 +33,7 @@ import '../../features/profile/help_support_screen.dart';
 import '../../features/profile/privacy_policy_screen.dart';
 import '../../features/profile/ratings_screen.dart';
 import '../../features/profile/returned_items_screen.dart';
+import '../../features/items/saved_searches_screen.dart';
 import '../../features/profile/blocked_users_screen.dart';
 import '../../features/profile/country_settings_screen.dart';
 import '../../features/profile/data_export_screen.dart';
@@ -179,6 +180,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/profile/blocked',
         builder: (context, state) => const BlockedUsersScreen(),
+      ),
+      GoRoute(
+        path: '/profile/saved-searches',
+        builder: (context, state) => const SavedSearchesScreen(),
       ),
       GoRoute(
         path: '/profile/country',
