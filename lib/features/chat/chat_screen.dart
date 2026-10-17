@@ -7,7 +7,14 @@ import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import '../../core/supabase/supabase_client.dart';
 import '../../core/widgets/post_link_bar.dart';
+import '../../core/errors/friendly_error.dart';
+import 'data/messages_repository.dart' show kChatPageSize;
+import 'widgets/chat_safety_menu.dart';
+import 'widgets/load_earlier_button.dart';
+import 'widgets/safe_send.dart';
+import 'widgets/safety_banner.dart';
 import '../items/data/claims_providers.dart';
+import '../profile/data/profile_providers.dart';
 import '../items/data/items_providers.dart';
 import '../matches/data/matches_providers.dart';
 import 'data/message_model.dart';
@@ -55,6 +62,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _controller = TextEditingController();
   Timer? _syncTimer;
   String? _lastMarkedReadId;
+  bool _noMoreEarlier = false; // set once "Load earlier" runs out of messages
 
   /// Recomputed on demand rather than stored, since it only depends on
   /// [widget.args] (fixed for this screen's lifetime) and the signed-in
@@ -104,6 +112,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _send() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    if (!await confirmBeforeSending(context, text) || !mounted) return;
 
     _controller.clear();
     try {
@@ -112,10 +121,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             receiverId: widget.args.otherUserId,
             content: text,
           );
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Message didn't send. Try again.")),
+        SnackBar(
+          content: Text(friendlyDatabaseError(e, fallback: "Message didn't send. Try again.")),
+        ),
       );
       _controller.text = text;
     }
@@ -140,7 +151,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.args.otherItemTitle)),
+      appBar: AppBar(
+        title: Text(widget.args.otherItemTitle),
+        actions: [
+          ChatSafetyMenu(
+            onSuggestMeetup: () {
+              _controller.text = kSafeMeetupMessage;
+              _controller.selection = TextSelection.collapsed(offset: _controller.text.length);
+            },
+            otherUserId: widget.args.otherUserId,
+            otherUserLabel: 'this person',
+            matchId: widget.args.matchId,
+          ),
+        ],
+      ),
       body: Column(
         children: [
           // The two posts this match is between — tap either to open it.
@@ -158,6 +182,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ],
           ),
+          const SafetyBanner(),
           ref.watch(chatLifecycleProvider(_lifecycleParams)).when(
                 loading: () => const SizedBox.shrink(),
                 error: (_, __) => const SizedBox.shrink(),
@@ -186,11 +211,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ),
                   );
                 }
+                // A full page loaded means there may be older messages. The
+                // list is reversed, so the item one past the newest..oldest
+                // run sits at the very top.
+                final showEarlier = messages.length >= kChatPageSize && !_noMoreEarlier;
                 return ListView.builder(
                   reverse: true,
                   padding: const EdgeInsets.all(16),
-                  itemCount: messages.length,
+                  itemCount: messages.length + (showEarlier ? 1 : 0),
                   itemBuilder: (context, index) {
+                    if (showEarlier && index == messages.length) {
+                      return LoadEarlierButton(
+                        onLoad: () async {
+                          final fetched = await ref
+                              .read(messagesRepositoryProvider)
+                              .loadEarlierMessages(widget.args.matchId, messages.first.createdAt);
+                          if (fetched < kChatPageSize && mounted) {
+                            setState(() => _noMoreEarlier = true);
+                          }
+                          return fetched >= kChatPageSize;
+                        },
+                      );
+                    }
                     final message = messages[messages.length - 1 - index];
                     final isMine = message.senderId == myId;
                     return _MessageBubble(message: message, isMine: isMine);
@@ -211,6 +253,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       textCapitalization: TextCapitalization.sentences,
                       minLines: 1,
                       maxLines: 4,
+                      maxLength: 2000, // matches the database limit
+                      buildCounter: (context, {required currentLength, required isFocused, maxLength}) =>
+                          null, // keep the compact look; the limit still applies
                       decoration: const InputDecoration(hintText: 'Message'),
                       onSubmitted: (_) => _send(),
                     ),
@@ -253,9 +298,17 @@ class _LifecycleBanner extends ConsumerWidget {
   final ChatLifecycleParams lifecycleParams;
 
   Future<void> _fileClaim(BuildContext context, WidgetRef ref) async {
+    // The finder may have set a question only the real owner could answer.
+    // Failing to load it just falls back to the generic prompt.
+    String? question;
+    try {
+      question = (await ref.read(itemDetailProvider(args.foundItemId).future)).proofQuestion;
+    } catch (_) {}
+    if (!context.mounted) return;
+
     final answer = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => const _ClaimAnswerDialog(),
+      builder: (dialogContext) => _ClaimAnswerDialog(question: question),
     );
     if (answer == null || answer.isEmpty || !context.mounted) return;
 
@@ -265,10 +318,13 @@ class _LifecycleBanner extends ConsumerWidget {
           .fileClaim(itemId: args.foundItemId, verificationAnswer: answer);
       if (!context.mounted) return;
       ref.invalidate(chatLifecycleProvider(lifecycleParams));
-    } catch (_) {
+    } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("Couldn't submit the claim.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(friendlyDatabaseError(e, fallback: "Couldn't submit the claim.")),
+        ),
+      );
     }
   }
 
@@ -334,7 +390,6 @@ class _LifecycleBanner extends ConsumerWidget {
     try {
       await ref.read(claimsRepositoryProvider).submitRating(
             itemId: args.foundItemId,
-            rateeId: args.otherUserId,
             stars: stars,
             comment: comment.isEmpty ? null : comment,
           );
@@ -388,7 +443,11 @@ class _LifecycleBanner extends ConsumerWidget {
       if (args.iAmClaimant) {
         message = 'Claim submitted — waiting for review.';
       } else {
-        message = 'Claim: "${claim.verificationAnswer}"';
+        final expected = ref.watch(proofAnswerProvider(args.foundItemId)).value;
+        final standing = ref.watch(personStandingProvider(args.otherUserId)).value;
+        message = 'Claim: "${claim.verificationAnswer}"'
+            '${standing != null ? '\nClaimant: ${standing.describe()}' : ''}'
+            '${(expected != null && expected.trim().isNotEmpty) ? '\nYour expected answer: "${expected.trim()}"' : ''}';
         pairedAction = Row(
           children: [
             Expanded(
@@ -455,7 +514,10 @@ class _LifecycleBanner extends ConsumerWidget {
 /// is a plain (stateless) [ConsumerWidget] rebuilt fresh on every claim
 /// status change and so isn't a safe place to own a long-lived controller.
 class _ClaimAnswerDialog extends StatefulWidget {
-  const _ClaimAnswerDialog();
+  const _ClaimAnswerDialog({this.question});
+
+  /// The finder's proof question, if they set one.
+  final String? question;
 
   @override
   State<_ClaimAnswerDialog> createState() => _ClaimAnswerDialogState();
@@ -470,17 +532,43 @@ class _ClaimAnswerDialogState extends State<_ClaimAnswerDialog> {
     super.dispose();
   }
 
+  bool get hasQuestion => widget.question != null && widget.question!.trim().isNotEmpty;
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('File a claim'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        maxLines: 3,
-        decoration: const InputDecoration(
-          hintText: 'Describe a unique detail that proves this is yours',
-        ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (hasQuestion) ...[
+            Text(
+              'The finder asks:',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              widget.question!.trim(),
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyLarge
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+          ],
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            maxLines: 3,
+            maxLength: 500,
+            decoration: InputDecoration(
+              hintText: hasQuestion
+                  ? 'Your answer'
+                  : 'Describe a unique detail that proves this is yours',
+            ),
+          ),
+        ],
       ),
       actions: [
         TextButton(
@@ -540,6 +628,7 @@ class _RatingDialogState extends State<_RatingDialog> {
           ),
           TextField(
             controller: _commentController,
+            maxLength: 500,
             decoration: const InputDecoration(hintText: 'Add a comment (optional)'),
           ),
         ],
