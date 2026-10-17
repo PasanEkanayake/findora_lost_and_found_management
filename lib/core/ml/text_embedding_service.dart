@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../supabase/supabase_client.dart';
+
 /// Calls the optional AI matching microservice (see ai_service/) to turn an
 /// item's title + description into a 384-d sentence embedding for the NLP
 /// side of multimodal matching (see supabase/05_multimodal_matching.sql).
@@ -45,12 +47,20 @@ class TextEmbeddingService {
   Future<List<double>?> tryEmbed({required String title, String? description}) async {
     final baseUrl = _baseUrl;
     if (baseUrl == null || baseUrl.isEmpty) return null;
+    final token = supabase.auth.currentSession?.accessToken;
+    if (token == null) return null;
 
     try {
       final response = await http
           .post(
             Uri.parse('$baseUrl/embed/text'),
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              // The service only answers signed-in people (ai_service/security.py)
+              // — it verifies this token with Supabase. No session, no call:
+              // the text signal is skipped, same as the service being down.
+              'Authorization': 'Bearer $token',
+            },
             body: jsonEncode({'title': title, 'description': description ?? ''}),
           )
           // Posting an item shouldn't hang indefinitely on a slow/asleep
