@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'chat_screen.dart';
+import 'data/safety_providers.dart';
 import 'data/conversation_model.dart';
 import '../../core/widgets/item_photo.dart';
 import '../../core/widgets/shimmer_list.dart';
@@ -62,7 +63,12 @@ class _MatchConversationsTab extends ConsumerWidget {
           title: "Couldn't load chats",
           body: 'Check your connection and pull down to try again.',
         ),
-        data: (conversations) {
+        data: (allConversations) {
+          // People I've blocked don't appear (the server also refuses their
+          // messages — this just tidies the list).
+          final blocked = ref.watch(blockedUserIdsProvider).value ?? const <String>{};
+          final conversations =
+              allConversations.where((c) => !blocked.contains(c.otherUserId)).toList();
           if (conversations.isEmpty) {
             return const _EmptyState(
               icon: Icons.chat_bubble_outline,
@@ -104,7 +110,9 @@ class _ContactThreadsTab extends ConsumerWidget {
           title: "Couldn't load messages",
           body: 'Check your connection and pull down to try again.',
         ),
-        data: (threads) {
+        data: (allThreads) {
+          final blocked = ref.watch(blockedUserIdsProvider).value ?? const <String>{};
+          final threads = allThreads.where((t) => !blocked.contains(t.otherUserId)).toList();
           if (threads.isEmpty) {
             return const _EmptyState(
               icon: Icons.forum_outlined,
@@ -276,6 +284,7 @@ class _ContactThreadTile extends StatelessWidget {
             threadId: thread.threadId,
             itemId: thread.itemId,
             itemTitle: thread.itemTitle,
+            otherUserId: thread.otherUserId,
             otherUserName: thread.otherUserName,
           ),
         );
