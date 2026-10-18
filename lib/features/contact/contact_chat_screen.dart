@@ -5,7 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/supabase/supabase_client.dart';
+import '../../core/errors/friendly_error.dart';
 import '../../core/widgets/post_link_bar.dart';
+import '../chat/data/messages_repository.dart' show kChatPageSize;
+import '../chat/widgets/chat_safety_menu.dart';
+import '../chat/widgets/load_earlier_button.dart';
+import '../chat/widgets/safe_send.dart';
+import '../chat/widgets/safety_banner.dart';
 import 'data/contact_message_model.dart';
 import 'data/contact_providers.dart';
 
@@ -15,6 +21,7 @@ class ContactChatArgs {
     required this.threadId,
     required this.itemId,
     required this.itemTitle,
+    required this.otherUserId,
     required this.otherUserName,
   });
 
@@ -23,6 +30,7 @@ class ContactChatArgs {
   /// The post this thread is about — lets the chat link straight to it.
   final String itemId;
   final String itemTitle;
+  final String otherUserId;
   final String otherUserName;
 }
 
@@ -44,6 +52,7 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
   final _controller = TextEditingController();
   Timer? _syncTimer;
   String? _lastMarkedReadId;
+  bool _noMoreEarlier = false; // set once "Load earlier" runs out of messages
 
   @override
   void initState() {
@@ -71,16 +80,19 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
   Future<void> _send() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    if (!await confirmBeforeSending(context, text) || !mounted) return;
 
     _controller.clear();
     try {
       await ref
           .read(contactRepositoryProvider)
           .sendMessage(threadId: widget.args.threadId, content: text);
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Message didn't send. Try again.")),
+        SnackBar(
+          content: Text(friendlyDatabaseError(e, fallback: "Message didn't send. Try again.")),
+        ),
       );
       _controller.text = text;
     }
@@ -106,7 +118,20 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
     });
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.args.otherUserName)),
+      appBar: AppBar(
+        title: Text(widget.args.otherUserName),
+        actions: [
+          ChatSafetyMenu(
+            onSuggestMeetup: () {
+              _controller.text = kSafeMeetupMessage;
+              _controller.selection = TextSelection.collapsed(offset: _controller.text.length);
+            },
+            otherUserId: widget.args.otherUserId,
+            otherUserLabel: widget.args.otherUserName,
+            threadId: widget.args.threadId,
+          ),
+        ],
+      ),
       body: Column(
         children: [
           // What this thread is about — replaces the old "About ..." caption
@@ -120,6 +145,7 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
               ),
             ],
           ),
+          const SafetyBanner(),
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -158,11 +184,25 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
                     ),
                   );
                 }
+                final showEarlier = messages.length >= kChatPageSize && !_noMoreEarlier;
                 return ListView.builder(
                   reverse: true,
                   padding: const EdgeInsets.all(16),
-                  itemCount: messages.length,
+                  itemCount: messages.length + (showEarlier ? 1 : 0),
                   itemBuilder: (context, index) {
+                    if (showEarlier && index == messages.length) {
+                      return LoadEarlierButton(
+                        onLoad: () async {
+                          final fetched = await ref
+                              .read(contactRepositoryProvider)
+                              .loadEarlierMessages(widget.args.threadId, messages.first.createdAt);
+                          if (fetched < kChatPageSize && mounted) {
+                            setState(() => _noMoreEarlier = true);
+                          }
+                          return fetched >= kChatPageSize;
+                        },
+                      );
+                    }
                     final message = messages[messages.length - 1 - index];
                     final isMine = message.senderId == myId;
                     return _ContactMessageBubble(message: message, isMine: isMine);
@@ -183,6 +223,9 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
                       textCapitalization: TextCapitalization.sentences,
                       minLines: 1,
                       maxLines: 4,
+                      maxLength: 2000, // matches the database limit
+                      buildCounter: (context, {required currentLength, required isFocused, maxLength}) =>
+                          null, // keep the compact look; the limit still applies
                       decoration: const InputDecoration(hintText: 'Message'),
                       onSubmitted: (_) => _send(),
                     ),
