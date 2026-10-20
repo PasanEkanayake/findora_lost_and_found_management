@@ -151,6 +151,32 @@ $env:USE_TF = "0"; uvicorn main:app --reload
 USE_TF=0 uvicorn main:app --reload
 ```
 
+## Security: who can call it
+
+`/embed/text` and `/embed/image` only answer **signed-in Findora users** and are
+rate limited per person; `/health` stays open (the app uses it to wake a sleeping
+host). The service checks the caller's Supabase token by asking Supabase
+(`GET {SUPABASE_URL}/auth/v1/user`), so it needs only your project URL and
+*publishable* key — never a secret — and works however your project signs tokens.
+
+Set these where the service runs (Render/Railway/Fly/Cloud Run environment):
+
+| Variable | Meaning |
+|---|---|
+| `SUPABASE_URL` | Your project URL, e.g. `https://xyz.supabase.co` — **required** |
+| `SUPABASE_PUBLISHABLE_KEY` | Your publishable key — **required** |
+| `RATE_LIMIT_PER_MINUTE` | Requests per person per minute (default 30) |
+| `CORS_ORIGINS` | Comma-separated browser origins allowed to call it (default none — the Android app doesn't need CORS) |
+| `AI_SERVICE_AUTH` | `required` (default) or `off` — `off` is for running locally only |
+
+Without `SUPABASE_URL`/`SUPABASE_PUBLISHABLE_KEY` the service **refuses** every
+`/embed` call (503) rather than running open. Uploads over 10 MB are rejected, and
+title/description lengths are capped to match the database. The rate limiter is
+per instance (in memory); if you run several instances, put a limit at your
+host/gateway too.
+
+Run the tests with `python -m unittest test_security -v`.
+
 ## Deploy it
 
 Any container host works. Render's free tier is the least setup for a
