@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../core/supabase/supabase_client.dart';
+import '../../chat/data/messages_repository.dart' show kChatPageSize;
 import 'contact_message_model.dart';
 import 'contact_thread_model.dart';
 
@@ -37,6 +38,24 @@ class ContactRepository {
     return (rows as List<dynamic>)
         .map((row) => ContactThreadModel.fromMap(row as Map<String, dynamic>))
         .toList();
+  }
+
+  /// Fetches the page of messages BEFORE [before] and merges them into the
+  /// live thread. Returns how many came back (fewer than [kChatPageSize]
+  /// means there is nothing earlier left).
+  Future<int> loadEarlierMessages(String threadId, DateTime before) async {
+    final rows = await supabase
+        .from(AppConstants.contactMessagesTable)
+        .select()
+        .eq('thread_id', threadId)
+        .lt('created_at', before.toUtc().toIso8601String())
+        .order('created_at', ascending: false)
+        .limit(kChatPageSize);
+    final live = _liveThreads[threadId];
+    for (final row in rows) {
+      live?.upsert(row);
+    }
+    return rows.length;
   }
 
   /// Deliberately not built on `.from(...).stream(...)` (Supabase's
@@ -78,7 +97,9 @@ class ContactRepository {
             .from(AppConstants.contactMessagesTable)
             .select()
             .eq('thread_id', threadId)
-            .order('created_at');
+            // The NEWEST page only; older messages load on request.
+            .order('created_at', ascending: false)
+            .limit(kChatPageSize);
         // Merge rather than replace outright: onListen fires the channel
         // subscription without waiting for this fetch to finish, so a
         // realtime event for a brand-new message could in principle
