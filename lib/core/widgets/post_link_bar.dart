@@ -104,7 +104,11 @@ class _PostLinkTile extends ConsumerWidget {
                     child: SizedBox(
                       width: 36,
                       height: 36,
-                      child: ItemPhoto(url: item?.imageUrls.firstOrNull),
+                      child: ItemPhoto(
+                        url: item?.imageUrls.firstOrNull,
+                        semanticLabel: 'Photo of $title',
+                        cacheWidth: 110,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
