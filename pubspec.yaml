@@ -28,6 +28,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Translations (English, Sinhala, Tamil) — see l10n.yaml and README.md,
+  # "Languages (English, Sinhala, Tamil)".
+  flutter_localizations:
+    sdk: flutter
 
   # --- Backend --------------------------------------------------------------
   supabase_flutter: ^2.17.2
@@ -42,6 +46,9 @@ dependencies:
   shimmer: ^4.0.0
   # Used for the "Contact support" mailto: link in Help & Support.
   url_launcher: ^6.3.2
+  # The Share button on a post (share-a-post links). 13.x: the version that
+  # resolves alongside flutter_secure_storage 11 (both depend on `win32`).
+  share_plus: ^13.3.1
 
   # --- Media & on-device ML ---------------------------------------------------
   image_picker: ^1.1.2
@@ -68,6 +75,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   # Used only to remember whether the onboarding carousel has been seen.
   shared_preferences: ^2.5.4
+  # Keeps the sign-in session in the Android Keystore instead of plain text
+  # (see lib/core/supabase/secure_session_storage.dart).
+  flutter_secure_storage: ^11.2.0
   # Used only by TextEmbeddingService to call the optional ai_service/
   # microservice — see that class's doc for why it's fully optional.
   http: ^1.2.2
@@ -75,11 +85,16 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # `flutter test integration_test` — see integration_test/main_flows_test.dart.
+  integration_test:
+    sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
+  # Generates lib/l10n/app_localizations*.dart from the .arb files (l10n.yaml).
+  generate: true
   assets:
     - .env
     - assets/models/
