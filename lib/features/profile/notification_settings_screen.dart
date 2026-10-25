@@ -51,7 +51,7 @@ class _NotificationSettingsScreenState
       await _loadPermissionStatus();
       if (_osPermission == AuthorizationStatus.authorized) {
         await registerPushTokenForCurrentUser();
-        ref.invalidate(myProfileProvider);
+        ref.invalidate(thisDeviceRegisteredProvider);
       }
     } catch (e) {
       // Same "Firebase not configured yet" case _loadPermissionStatus
@@ -83,7 +83,7 @@ class _NotificationSettingsScreenState
       } else {
         await clearPushToken();
       }
-      ref.invalidate(myProfileProvider);
+      ref.invalidate(thisDeviceRegisteredProvider);
     } catch (e) {
       debugPrint('Could not update push token: $e');
       if (mounted) {
@@ -100,6 +100,7 @@ class _NotificationSettingsScreenState
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final profileAsync = ref.watch(myProfileProvider);
+    final registered = ref.watch(thisDeviceRegisteredProvider).value ?? false;
     final osDenied = _osPermission == AuthorizationStatus.denied;
 
     return Scaffold(
@@ -151,7 +152,7 @@ class _NotificationSettingsScreenState
                     Text('Turn on notifications', style: theme.textTheme.titleSmall),
                     const SizedBox(height: 6),
                     Text(
-                      "Get notified when someone confirms a match or sends you a message.",
+                      "Get notified when a match is confirmed or waiting for you, or someone sends you a message.",
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
@@ -168,14 +169,14 @@ class _NotificationSettingsScreenState
           profileAsync.when(
             loading: () => const SizedBox.shrink(),
             error: (_, __) => const SizedBox.shrink(),
-            data: (profile) => SwitchListTile(
+            data: (_) => SwitchListTile(
               title: const Text('Push notifications'),
               subtitle: Text(
-                profile.fcmToken != null
+                registered
                     ? 'This device will receive push alerts'
                     : "This device won't receive push alerts",
               ),
-              value: profile.fcmToken != null,
+              value: registered,
               onChanged: (_osPermission == AuthorizationStatus.authorized && !_isTogglingPush)
                   ? _togglePush
                   : null,
