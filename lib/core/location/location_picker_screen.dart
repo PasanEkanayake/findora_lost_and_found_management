@@ -3,6 +3,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'current_location.dart';
+import 'public_location_label.dart';
 
 /// Result of manually adjusting a pin — always returned together so callers
 /// never end up with coordinates and a label that disagree.
@@ -199,10 +200,12 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       if (placemarks.isNotEmpty) {
         final p = placemarks.first;
         countryCode = p.isoCountryCode?.toUpperCase();
-        label = [p.street, p.locality]
-            .where((part) => part != null && part.isNotEmpty)
-            .join(', ');
-        if (label.isEmpty) label = 'Pinned location';
+        // Shown to other people, so a neighbourhood or town — never the street.
+        label = publicLocationLabel(
+          subLocality: p.subLocality,
+          locality: p.locality,
+          administrativeArea: p.administrativeArea,
+        );
       }
     } catch (_) {
       // Reverse geocoding can fail independently of the map itself — the
