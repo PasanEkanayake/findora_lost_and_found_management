@@ -22,6 +22,8 @@ class AppConstants {
   static const String reportsTable = 'reports';
   static const String userBlocksTable = 'user_blocks';
   static const String userReportsTable = 'user_reports';
+  static const String appealsTable = 'appeals';
+  static const String moderationLogTable = 'moderation_log';
   static const String ratingsTable = 'ratings';
   static const String notificationsTable = 'notifications';
 
@@ -31,7 +33,11 @@ class AppConstants {
 
   // Storage buckets (see 04_storage_setup.sql)
   static const String itemImagesBucket = 'item-images';
+  // Edge Function that makes list-size thumbnails (supabase/functions/make-thumbnails).
+  static const String makeThumbnailsFunction = 'make-thumbnails';
   static const String avatarsBucket = 'avatars';
+  // Private — photos sent inside chats (see supabase/30_chat_photos.sql).
+  static const String chatImagesBucket = 'chat-images';
 
   // On-device model — see assets/models/README.md
   static const String tfliteModelAsset =
