@@ -105,7 +105,7 @@ class _PostLinkTile extends ConsumerWidget {
                       width: 36,
                       height: 36,
                       child: ItemPhoto(
-                        url: item?.imageUrls.firstOrNull,
+                        url: item?.thumbnailUrl,
                         semanticLabel: 'Photo of $title',
                         cacheWidth: 110,
                       ),
