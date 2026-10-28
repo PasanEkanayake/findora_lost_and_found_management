@@ -9,9 +9,11 @@ import '../providers/unread_counts_provider.dart';
 import '../../features/chat/data/messages_providers.dart';
 import '../../features/contact/data/contact_providers.dart';
 import '../../features/home/item_feed_screen.dart';
+import '../../features/items/data/thumbnail_backfill_provider.dart';
 import '../../features/matches/data/embedding_backfill_provider.dart';
 import '../../features/matches/data/matches_providers.dart';
 import '../../features/notifications/data/notifications_providers.dart';
+import '../../l10n/app_localizations.dart';
 
 /// Bottom navigation shell for the five persistent tabs (Browse, Matches,
 /// Chats, Notifications, Profile). The floating action button is
@@ -82,6 +84,9 @@ class _MainShellState extends ConsumerState<MainShell> {
     // embedding, whichever tab they land on (see the provider's doc for why
     // it can't wait for the Matches tab). The value itself isn't used.
     ref.watch(embeddingBackfillProvider);
+    // Small list-size copies of the user's older photos (see
+    // thumbnailBackfillProvider); silent and best effort.
+    ref.watch(thumbnailBackfillProvider);
 
     // Map view (Browse tab) shows its own full-screen layout with no room
     // for a floating action button sitting over it, and "report an item"
@@ -113,7 +118,7 @@ class _MainShellState extends ConsumerState<MainShell> {
             ? FloatingActionButton.extended(
                 onPressed: () => context.push('/post-item'),
                 icon: const Icon(Icons.add_a_photo_outlined),
-                label: const Text('Report item'),
+                label: Text(AppLocalizations.of(context).reportItemButton),
               )
             : null,
         floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
@@ -149,20 +154,20 @@ class _MainShellState extends ConsumerState<MainShell> {
             );
           },
           destinations: [
-            const NavigationDestination(
-              icon: Icon(Icons.search_outlined),
-              selectedIcon: Icon(Icons.search),
-              label: 'Browse',
+            NavigationDestination(
+              icon: const Icon(Icons.search_outlined),
+              selectedIcon: const Icon(Icons.search),
+              label: AppLocalizations.of(context).navBrowse,
             ),
-            const NavigationDestination(
-              icon: Icon(Icons.auto_awesome_outlined),
-              selectedIcon: Icon(Icons.auto_awesome),
-              label: 'Matches',
+            NavigationDestination(
+              icon: const Icon(Icons.auto_awesome_outlined),
+              selectedIcon: const Icon(Icons.auto_awesome),
+              label: AppLocalizations.of(context).navMatches,
             ),
             NavigationDestination(
               icon: _BadgedIcon(count: unreadChats, icon: const Icon(Icons.chat_bubble_outline)),
               selectedIcon: _BadgedIcon(count: unreadChats, icon: const Icon(Icons.chat_bubble)),
-              label: 'Chats',
+              label: AppLocalizations.of(context).navChats,
             ),
             NavigationDestination(
               icon: _BadgedIcon(
@@ -173,12 +178,12 @@ class _MainShellState extends ConsumerState<MainShell> {
                 count: unreadNotifications,
                 icon: const Icon(Icons.notifications),
               ),
-              label: 'Alerts',
+              label: AppLocalizations.of(context).navAlerts,
             ),
-            const NavigationDestination(
-              icon: Icon(Icons.person_outline),
-              selectedIcon: Icon(Icons.person),
-              label: 'Profile',
+            NavigationDestination(
+              icon: const Icon(Icons.person_outline),
+              selectedIcon: const Icon(Icons.person),
+              label: AppLocalizations.of(context).navProfile,
             ),
           ],
         ),
