@@ -2,22 +2,29 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import '../../core/supabase/supabase_client.dart';
 import '../../core/widgets/post_link_bar.dart';
 import '../../core/errors/friendly_error.dart';
 import 'data/messages_repository.dart' show kChatPageSize;
+import '../items/widgets/photo_strip.dart' show pickPhotoWithSheet;
+import 'data/chat_images.dart';
+import 'data/typing_channel.dart';
+import 'widgets/chat_bubble.dart';
+import 'widgets/claim_answer_dialog.dart';
+import 'widgets/chat_composer.dart';
 import 'widgets/chat_safety_menu.dart';
+import 'widgets/typing_indicator.dart';
 import 'widgets/load_earlier_button.dart';
 import 'widgets/safe_send.dart';
 import 'widgets/safety_banner.dart';
+import '../items/data/claim_attempt_status.dart';
 import '../items/data/claims_providers.dart';
 import '../profile/data/profile_providers.dart';
 import '../items/data/items_providers.dart';
 import '../matches/data/matches_providers.dart';
-import 'data/message_model.dart';
 import 'data/messages_providers.dart';
 
 /// Everything ChatScreen needs, passed via go_router's `extra` — a match
@@ -60,6 +67,9 @@ class ChatScreen extends ConsumerStatefulWidget {
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _controller = TextEditingController();
+  final _picker = ImagePicker();
+  late final TypingChannel _typing;
+  bool _sendingPhoto = false;
   Timer? _syncTimer;
   String? _lastMarkedReadId;
   bool _noMoreEarlier = false; // set once "Load earlier" runs out of messages
@@ -81,6 +91,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _typing = TypingChannel(
+      topic: 'typing:m:${widget.args.matchId}',
+      myId: supabase.auth.currentUser?.id ?? '',
+    )..start();
     final repo = ref.read(messagesRepositoryProvider);
     repo.markConversationRead(widget.args.matchId);
     // The message provider stays alive between visits (see
@@ -105,6 +119,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   void dispose() {
     _syncTimer?.cancel();
+    _typing.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -115,6 +130,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (!await confirmBeforeSending(context, text) || !mounted) return;
 
     _controller.clear();
+    _typing.stopTyping();
     try {
       await ref.read(messagesRepositoryProvider).sendMessage(
             matchId: widget.args.matchId,
@@ -132,6 +148,47 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  /// Picks a photo, uploads it to the private chat bucket and sends it as a
+  /// message — with whatever is typed in the box as its caption.
+  Future<void> _sendPhoto() async {
+    if (_sendingPhoto) return;
+    final file = await pickPhotoWithSheet(context, _picker);
+    if (file == null || !mounted) return;
+    final caption = _controller.text.trim();
+    if (caption.isNotEmpty && !await confirmBeforeSending(context, caption)) return;
+    if (!mounted) return;
+
+    setState(() => _sendingPhoto = true);
+    final images = ref.read(chatImagesProvider);
+    String? path;
+    try {
+      path = await images.upload(
+        kind: ChatKind.match,
+        conversationId: widget.args.matchId,
+        file: file,
+      );
+      await ref.read(messagesRepositoryProvider).sendMessage(
+            matchId: widget.args.matchId,
+            receiverId: widget.args.otherUserId,
+            content: caption,
+            imagePath: path,
+          );
+      _controller.clear();
+      _typing.stopTyping();
+    } catch (e) {
+      if (path != null) unawaited(images.deleteQuietly(path));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(friendlyDatabaseError(e, fallback: "Photo didn't send. Try again.")),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sendingPhoto = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -146,6 +203,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final latest = messages.last;
       if (latest.senderId != myId && latest.id != _lastMarkedReadId) {
         _lastMarkedReadId = latest.id;
+        _typing.otherSentMessage();
         ref.read(messagesRepositoryProvider).markConversationRead(widget.args.matchId);
       }
     });
@@ -235,40 +293,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     }
                     final message = messages[messages.length - 1 - index];
                     final isMine = message.senderId == myId;
-                    return _MessageBubble(message: message, isMine: isMine);
+                    return ChatBubble(
+                      isMine: isMine,
+                      content: message.content,
+                      createdAt: message.createdAt,
+                      imagePath: message.imagePath,
+                    );
                   },
                 );
               },
             ),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      textCapitalization: TextCapitalization.sentences,
-                      minLines: 1,
-                      maxLines: 4,
-                      maxLength: 2000, // matches the database limit
-                      buildCounter: (context, {required currentLength, required isFocused, maxLength}) =>
-                          null, // keep the compact look; the limit still applies
-                      decoration: const InputDecoration(hintText: 'Message'),
-                      onSubmitted: (_) => _send(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: _send,
-                    tooltip: 'Send message',
-                    icon: const Icon(Icons.send_rounded),
-                  ),
-                ],
-              ),
-            ),
+          TypingIndicator(typing: _typing.otherTyping),
+          ChatComposer(
+            controller: _controller,
+            onSend: _send,
+            onAttachPhoto: _sendPhoto,
+            sendingPhoto: _sendingPhoto,
+            onChanged: (text) => _typing.typed(text.trim().isNotEmpty),
           ),
         ],
       ),
@@ -297,7 +339,19 @@ class _LifecycleBanner extends ConsumerWidget {
   /// no reason.
   final ChatLifecycleParams lifecycleParams;
 
+  /// The found post can still be claimed (the database allows it while it is
+  /// open or matched — not once another claim was approved, it expired, or it
+  /// was returned).
+  bool get _postOpenForClaims => status.itemStatus == 'open' || status.itemStatus == 'matched';
+
+  /// Posts a claim is being filed for right now. Stops a second tap on the
+  /// banner's button, while the first claim is still being sent, from opening
+  /// another form and filing a duplicate (the banner is stateless, so this
+  /// lives here).
+  static final Set<String> _filing = <String>{};
+
   Future<void> _fileClaim(BuildContext context, WidgetRef ref) async {
+    if (_filing.contains(args.foundItemId)) return;
     // The finder may have set a question only the real owner could answer.
     // Failing to load it just falls back to the generic prompt.
     String? question;
@@ -306,12 +360,30 @@ class _LifecycleBanner extends ConsumerWidget {
     } catch (_) {}
     if (!context.mounted) return;
 
-    final answer = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => _ClaimAnswerDialog(question: question),
+    // The limit is enforced by the database; this reads the standing fresh so
+    // the form can say which attempt this is (and not open at all when there
+    // are none left or a wait is running).
+    final attempts = await ref.read(claimsRepositoryProvider).fetchAttemptStatus(args.foundItemId);
+    if (!context.mounted) return;
+    if (attempts != null && (attempts.isLocked || attempts.waitMinutes() != null)) {
+      ref.invalidate(chatLifecycleProvider(lifecycleParams));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(claimRejectedMessage(attempts))),
+      );
+      return;
+    }
+
+    final answer = await showClaimAnswerDialog(
+      context,
+      question: question,
+      attempts: attempts,
+      // A rejected answer won't be accepted the second time, and each try
+      // counts: stop the same words being sent twice.
+      previousAnswer: status.claim?.verificationAnswer,
     );
     if (answer == null || answer.isEmpty || !context.mounted) return;
 
+    _filing.add(args.foundItemId);
     try {
       await ref
           .read(claimsRepositoryProvider)
@@ -322,9 +394,21 @@ class _LifecycleBanner extends ConsumerWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(friendlyDatabaseError(e, fallback: "Couldn't submit the claim.")),
+          content: Text(
+            friendlyDatabaseError(
+              e,
+              // The database's own explanations (too short, same answer, no
+              // attempts left, wait) are shown as they are; anything else —
+              // typically the post no longer being open for claims — gets this.
+              fallback: "Couldn't submit the claim. The post may no longer be open "
+                  'for claims — pull to refresh and try again.',
+            ),
+          ),
         ),
       );
+      ref.invalidate(chatLifecycleProvider(lifecycleParams));
+    } finally {
+      _filing.remove(args.foundItemId);
     }
   }
 
@@ -429,9 +513,18 @@ class _LifecycleBanner extends ConsumerWidget {
           child: const Text('Rate'),
         );
       }
+    } else if (claim == null && !_postOpenForClaims) {
+      // Someone else's claim was approved, or the post expired: the database
+      // refuses a new claim, so don't offer one.
+      message = args.iAmClaimant
+          ? (status.itemStatus == 'expired'
+              ? 'This post has expired, so it can no longer be claimed.'
+              : 'This post is no longer open for claims.')
+          : 'This post is no longer open for claims.';
     } else if (claim == null) {
       if (args.iAmClaimant) {
-        message = 'Think this is yours? File a claim to verify it.';
+        message = 'Think this is yours? File a claim to verify it.'
+            '${status.attempts != null ? '\n${claimAttemptsIntro(status.attempts!)}' : ''}';
         action = FilledButton(
           onPressed: () => _fileClaim(context, ref),
           child: const Text('File a claim'),
@@ -477,12 +570,27 @@ class _LifecycleBanner extends ConsumerWidget {
         );
       }
     } else {
-      message = "That claim wasn't approved.";
-      if (args.iAmClaimant) {
-        action = OutlinedButton(
-          onPressed: () => _fileClaim(context, ref),
-          child: const Text('File a new claim'),
-        );
+      final attempts = status.attempts;
+      if (args.iAmClaimant && attempts != null) {
+        // Warn BEFORE the limit (attempts and any wait left) and say so plainly
+        // AT it — no button once the attempts are used up.
+        message = claimRejectedMessage(attempts);
+        if (!attempts.isLocked && _postOpenForClaims) {
+          action = OutlinedButton(
+            // Always tappable: _fileClaim re-checks the standing and explains a wait
+            // that has just started or just ended, so a stale banner can't strand anyone.
+            onPressed: () => _fileClaim(context, ref),
+            child: const Text('File a new claim'),
+          );
+        }
+      } else {
+        message = "That claim wasn't approved.";
+        if (args.iAmClaimant && _postOpenForClaims) {
+          action = OutlinedButton(
+            onPressed: () => _fileClaim(context, ref),
+            child: const Text('File a new claim'),
+          );
+        }
       }
     }
 
@@ -508,84 +616,8 @@ class _LifecycleBanner extends ConsumerWidget {
   }
 }
 
-/// Content of the "File a claim" dialog, as its own widget so its
-/// [TextEditingController] is disposed when the dialog closes — tied to
-/// *this* dialog's own lifecycle rather than to [_LifecycleBanner], which
-/// is a plain (stateless) [ConsumerWidget] rebuilt fresh on every claim
-/// status change and so isn't a safe place to own a long-lived controller.
-class _ClaimAnswerDialog extends StatefulWidget {
-  const _ClaimAnswerDialog({this.question});
-
-  /// The finder's proof question, if they set one.
-  final String? question;
-
-  @override
-  State<_ClaimAnswerDialog> createState() => _ClaimAnswerDialogState();
-}
-
-class _ClaimAnswerDialogState extends State<_ClaimAnswerDialog> {
-  final _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  bool get hasQuestion => widget.question != null && widget.question!.trim().isNotEmpty;
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('File a claim'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (hasQuestion) ...[
-            Text(
-              'The finder asks:',
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              widget.question!.trim(),
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyLarge
-                  ?.copyWith(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 12),
-          ],
-          TextField(
-            controller: _controller,
-            autofocus: true,
-            maxLines: 3,
-            maxLength: 500,
-            decoration: InputDecoration(
-              hintText: hasQuestion
-                  ? 'Your answer'
-                  : 'Describe a unique detail that proves this is yours',
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, _controller.text.trim()),
-          child: const Text('Submit'),
-        ),
-      ],
-    );
-  }
-}
-
 /// Content of the "How did it go?" rating dialog — same reasoning as
-/// [_ClaimAnswerDialog] for why this owns its controller as a proper
+/// [ClaimAnswerDialog] for why this owns its controller as a proper
 /// [StatefulWidget] instead of a bare [StatefulBuilder] closure.
 class _RatingDialog extends StatefulWidget {
   const _RatingDialog();
@@ -646,51 +678,6 @@ class _RatingDialogState extends State<_RatingDialog> {
           child: const Text('Submit'),
         ),
       ],
-    );
-  }
-}
-
-class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message, required this.isMine});
-
-  final MessageModel message;
-  final bool isMine;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final bubbleColor = isMine ? theme.colorScheme.primary : theme.colorScheme.surfaceContainerHighest;
-    final textColor = isMine ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
-
-    return Align(
-      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-        decoration: BoxDecoration(
-          color: bubbleColor,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isMine ? 16 : 4),
-            bottomRight: Radius.circular(isMine ? 4 : 16),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(message.content, style: theme.textTheme.bodyMedium?.copyWith(color: textColor)),
-            const SizedBox(height: 2),
-            Text(
-              DateFormat.jm().format(message.createdAt),
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: textColor.withValues(alpha: 0.7)),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
