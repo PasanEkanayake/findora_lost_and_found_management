@@ -26,6 +26,8 @@ import '../../features/items/edit_item_screen.dart';
 import '../../features/items/data/item_model.dart';
 import '../../features/items/post_item_screen.dart';
 import '../../features/profile/admin_reports_screen.dart';
+import 'deep_links.dart';
+import '../../features/profile/hidden_posts_screen.dart';
 import '../../features/profile/edit_profile_screen.dart';
 import '../../features/profile/my_items_screen.dart';
 import '../../features/profile/notification_settings_screen.dart';
@@ -91,7 +93,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // including a session expiring mid-use.
       if (location == '/splash') return null;
 
-      if (!isLoggedIn && !isAuthRoute) return '/login';
+      if (!isLoggedIn && !isAuthRoute) {
+        // A shared post opened while signed out: remember it, so signing in
+        // lands on the post rather than on the feed (see deep_links.dart).
+        final shared = itemRouteForSharedPath(state.uri.path);
+        if (shared != null) pendingDeepLink = shared;
+        return '/login';
+      }
 
       if (isLoggedIn) {
         // See looksLikeFreshOAuthSignup's doc (auth_providers.dart) for
@@ -103,7 +111,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             !ref.read(signupWelcomeSeenProvider);
 
         if (isFreshGoogleSignup) return isWelcomeRoute ? null : '/welcome';
-        if (isWelcomeRoute || isAuthRoute) return '/feed';
+        if (isWelcomeRoute || isAuthRoute) {
+          final pending = pendingDeepLink;
+          pendingDeepLink = null;
+          return pending ?? '/feed';
+        }
       }
 
       return null;
@@ -126,6 +138,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/contact-chat',
         builder: (context, state) => ContactChatScreen(args: state.extra as ContactChatArgs),
       ),
+      // Shared-post links (see deep_links.dart): the https link and the
+      // findora:// one both become the normal post page. An id that isn't a
+      // well-formed uuid goes to the feed instead of a broken page.
+      GoRoute(
+        path: '/p/:id',
+        redirect: (context, state) => itemRouteForSharedPath(state.uri.path) ?? '/feed',
+      ),
+      GoRoute(
+        path: '/open/p/:id',
+        redirect: (context, state) => itemRouteForSharedPath(state.uri.path) ?? '/feed',
+      ),
       GoRoute(
         path: '/item/:id',
         builder: (context, state) => ItemDetailScreen(itemId: state.pathParameters['id']!),
@@ -144,6 +167,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/admin/reports',
         builder: (context, state) => const AdminReportsScreen(),
+      ),
+      GoRoute(
+        path: '/profile/hidden-posts',
+        builder: (context, state) => const HiddenPostsScreen(),
       ),
       GoRoute(
         path: '/profile/edit',
