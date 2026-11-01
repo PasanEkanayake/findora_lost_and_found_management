@@ -2,17 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../core/supabase/supabase_client.dart';
 import '../../core/errors/friendly_error.dart';
 import '../../core/widgets/post_link_bar.dart';
 import '../chat/data/messages_repository.dart' show kChatPageSize;
+import '../chat/data/chat_images.dart';
+import '../chat/data/typing_channel.dart';
+import '../chat/widgets/chat_bubble.dart';
+import '../chat/widgets/chat_composer.dart';
 import '../chat/widgets/chat_safety_menu.dart';
+import '../chat/widgets/typing_indicator.dart';
+import '../items/widgets/photo_strip.dart' show pickPhotoWithSheet;
 import '../chat/widgets/load_earlier_button.dart';
 import '../chat/widgets/safe_send.dart';
 import '../chat/widgets/safety_banner.dart';
-import 'data/contact_message_model.dart';
 import 'data/contact_providers.dart';
 
 /// Everything ContactChatScreen needs, passed via go_router's `extra`.
@@ -50,6 +55,9 @@ class ContactChatScreen extends ConsumerStatefulWidget {
 
 class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
   final _controller = TextEditingController();
+  final _picker = ImagePicker();
+  late final TypingChannel _typing;
+  bool _sendingPhoto = false;
   Timer? _syncTimer;
   String? _lastMarkedReadId;
   bool _noMoreEarlier = false; // set once "Load earlier" runs out of messages
@@ -57,6 +65,10 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
   @override
   void initState() {
     super.initState();
+    _typing = TypingChannel(
+      topic: 'typing:c:${widget.args.threadId}',
+      myId: supabase.auth.currentUser?.id ?? '',
+    )..start();
     final repo = ref.read(contactRepositoryProvider);
     repo.markThreadRead(widget.args.threadId);
     // The message provider stays alive between visits (see
@@ -73,6 +85,7 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
   @override
   void dispose() {
     _syncTimer?.cancel();
+    _typing.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -83,6 +96,7 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
     if (!await confirmBeforeSending(context, text) || !mounted) return;
 
     _controller.clear();
+    _typing.stopTyping();
     try {
       await ref
           .read(contactRepositoryProvider)
@@ -95,6 +109,46 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
         ),
       );
       _controller.text = text;
+    }
+  }
+
+  /// Picks a photo, uploads it to the private chat bucket and sends it as a
+  /// message — with whatever is typed in the box as its caption.
+  Future<void> _sendPhoto() async {
+    if (_sendingPhoto) return;
+    final file = await pickPhotoWithSheet(context, _picker);
+    if (file == null || !mounted) return;
+    final caption = _controller.text.trim();
+    if (caption.isNotEmpty && !await confirmBeforeSending(context, caption)) return;
+    if (!mounted) return;
+
+    setState(() => _sendingPhoto = true);
+    final images = ref.read(chatImagesProvider);
+    String? path;
+    try {
+      path = await images.upload(
+        kind: ChatKind.thread,
+        conversationId: widget.args.threadId,
+        file: file,
+      );
+      await ref.read(contactRepositoryProvider).sendMessage(
+            threadId: widget.args.threadId,
+            content: caption,
+            imagePath: path,
+          );
+      _controller.clear();
+      _typing.stopTyping();
+    } catch (e) {
+      if (path != null) unawaited(images.deleteQuietly(path));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(friendlyDatabaseError(e, fallback: "Photo didn't send. Try again.")),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sendingPhoto = false);
     }
   }
 
@@ -113,6 +167,7 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
       final latest = messages.last;
       if (latest.senderId != myId && latest.id != _lastMarkedReadId) {
         _lastMarkedReadId = latest.id;
+        _typing.otherSentMessage();
         ref.read(contactRepositoryProvider).markThreadRead(widget.args.threadId);
       }
     });
@@ -205,88 +260,26 @@ class _ContactChatScreenState extends ConsumerState<ContactChatScreen> {
                     }
                     final message = messages[messages.length - 1 - index];
                     final isMine = message.senderId == myId;
-                    return _ContactMessageBubble(message: message, isMine: isMine);
+                    return ChatBubble(
+                      isMine: isMine,
+                      content: message.content,
+                      createdAt: message.createdAt,
+                      imagePath: message.imagePath,
+                    );
                   },
                 );
               },
             ),
           ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      textCapitalization: TextCapitalization.sentences,
-                      minLines: 1,
-                      maxLines: 4,
-                      maxLength: 2000, // matches the database limit
-                      buildCounter: (context, {required currentLength, required isFocused, maxLength}) =>
-                          null, // keep the compact look; the limit still applies
-                      decoration: const InputDecoration(hintText: 'Message'),
-                      onSubmitted: (_) => _send(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: _send,
-                    tooltip: 'Send message',
-                    icon: const Icon(Icons.send_rounded),
-                  ),
-                ],
-              ),
-            ),
+          TypingIndicator(typing: _typing.otherTyping),
+          ChatComposer(
+            controller: _controller,
+            onSend: _send,
+            onAttachPhoto: _sendPhoto,
+            sendingPhoto: _sendingPhoto,
+            onChanged: (text) => _typing.typed(text.trim().isNotEmpty),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ContactMessageBubble extends StatelessWidget {
-  const _ContactMessageBubble({required this.message, required this.isMine});
-
-  final ContactMessageModel message;
-  final bool isMine;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final bubbleColor =
-        isMine ? theme.colorScheme.primary : theme.colorScheme.surfaceContainerHighest;
-    final textColor = isMine ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
-
-    return Align(
-      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-        decoration: BoxDecoration(
-          color: bubbleColor,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isMine ? 16 : 4),
-            bottomRight: Radius.circular(isMine ? 4 : 16),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(message.content, style: theme.textTheme.bodyMedium?.copyWith(color: textColor)),
-            const SizedBox(height: 2),
-            Text(
-              DateFormat.jm().format(message.createdAt),
-              style:
-                  theme.textTheme.labelSmall?.copyWith(color: textColor.withValues(alpha: 0.7)),
-            ),
-          ],
-        ),
       ),
     );
   }
