@@ -177,6 +177,7 @@ class MessagesRepository {
     required String matchId,
     required String receiverId,
     required String content,
+    String? imagePath,
   }) async {
     final row = await supabase
         .from(AppConstants.messagesTable)
@@ -185,6 +186,7 @@ class MessagesRepository {
           'sender_id': supabase.auth.currentUser!.id,
           'receiver_id': receiverId,
           'content': content,
+          if (imagePath != null) 'image_path': imagePath,
         })
         .select()
         .single();
