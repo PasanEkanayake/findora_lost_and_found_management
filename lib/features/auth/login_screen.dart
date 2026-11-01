@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/supabase/supabase_client.dart';
+import 'widgets/google_auth_button.dart';
 
 /// Email/password + Google sign-in. On success there's deliberately no
 /// manual navigation here — the router's `redirect` callback (see
@@ -138,20 +139,6 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _handleGoogleSignIn() async {
-    try {
-      // Requires the redirect URL to be registered in Supabase Dashboard
-      // (Authentication > URL Configuration) and as a native URL scheme —
-      // see README.md, "Google sign-in setup".
-      await supabase.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: 'io.supabase.findora://login-callback',
-      );
-    } on AuthException catch (e) {
-      _showMessage(e.message, isError: true);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -247,11 +234,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       : const Text('Sign in'),
                 ),
                 const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: _handleGoogleSignIn,
-                  icon: const Icon(Icons.g_mobiledata, size: 28),
-                  label: const Text('Continue with Google'),
-                ),
+                const GoogleAuthButton(label: 'Continue with Google'),
                 const SizedBox(height: 24),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
