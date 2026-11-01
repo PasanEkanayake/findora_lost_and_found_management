@@ -210,13 +210,18 @@ class ContactRepository {
   /// app" when Realtime wasn't delivering). If the realtime event for the
   /// same row arrives afterwards, it just replaces the identical entry by
   /// id — no duplicate.
-  Future<void> sendMessage({required String threadId, required String content}) async {
+  Future<void> sendMessage({
+    required String threadId,
+    required String content,
+    String? imagePath,
+  }) async {
     final row = await supabase
         .from(AppConstants.contactMessagesTable)
         .insert({
           'thread_id': threadId,
           'sender_id': supabase.auth.currentUser!.id,
           'content': content,
+          if (imagePath != null) 'image_path': imagePath,
         })
         .select()
         .single();
