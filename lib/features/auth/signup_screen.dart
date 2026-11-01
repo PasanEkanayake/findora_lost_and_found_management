@@ -3,13 +3,14 @@ import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/auth/signup_block_messages.dart';
 import '../../core/location/countries.dart';
 import '../../core/supabase/supabase_client.dart';
 import '../../core/widgets/password_strength.dart';
 import '../items/widgets/country_field.dart';
+import 'widgets/google_auth_button.dart';
 
 /// Account creation. `signUp()` passes `full_name` and `country_code` in `data`, which the
 /// `handle_new_user` trigger (see supabase/02_functions_and_triggers.sql)
@@ -85,10 +86,8 @@ class _SignupScreenState extends State<SignupScreen> {
       final list = rows as List<dynamic>;
       if (list.isEmpty) return null;
       final retryAt = (list.first as Map<String, dynamic>)['retry_at'] as String?;
-      if (retryAt == null) return "This email can't be used to create an account.";
-      final date = DateFormat.yMMMd().format(DateTime.parse(retryAt).toLocal());
-      return 'An account with this email was recently deleted. '
-          'You can sign up with it again on $date.';
+      // Same words as a Google sign-up that hits the same wait.
+      return emailCooldownMessage(retryAt == null ? null : DateTime.parse(retryAt));
     } catch (_) {
       return null;
     }
@@ -238,6 +237,27 @@ class _SignupScreenState extends State<SignupScreen> {
                         )
                       : const Text('Create account'),
                 ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    const Expanded(child: Divider()),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        'or',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    const Expanded(child: Divider()),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                // Creates the account with Google instead of a password. An
+                // address that belongs to a recently deleted account is
+                // refused here too, with the same explanation.
+                const GoogleAuthButton(label: 'Sign up with Google'),
                 const SizedBox(height: 24),
               ],
             ),
