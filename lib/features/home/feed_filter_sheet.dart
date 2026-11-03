@@ -119,6 +119,12 @@ class _FeedFilterSheetState extends State<_FeedFilterSheet> {
                 const Spacer(),
                 FilledButton(
                   onPressed: () => _close(FeedFilterAction.apply),
+                  // The app theme makes every FilledButton full-width
+                  // (minimumSize: Size.fromHeight(52), i.e. an infinite minimum
+                  // width). A Row gives its children unlimited width, so an
+                  // unstyled one here throws a layout error — and in a release
+                  // build the sheet then draws nothing but its dim backdrop.
+                  style: FilledButton.styleFrom(minimumSize: const Size(96, 48)),
                   child: const Text('Apply'),
                 ),
               ],
