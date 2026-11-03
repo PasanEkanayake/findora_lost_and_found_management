@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import '../../core/location/approximate_area.dart';
 import '../../core/location/current_location.dart';
 import '../items/data/items_providers.dart';
 
@@ -88,6 +89,19 @@ class _ItemsMapViewState extends ConsumerState<ItemsMapView> {
           initialCameraPosition: CameraPosition(target: centerPoint, zoom: 13),
           myLocationEnabled: true,
           myLocationButtonEnabled: false,
+          // Positions are approximate (about 500 m): the circles say so, and
+          // keep a pin from claiming a precision it doesn't have.
+          circles: {
+            for (final item in items)
+              Circle(
+                circleId: CircleId(item.id),
+                center: LatLng(item.latitude, item.longitude),
+                radius: approximateAreaRadiusMeters,
+                fillColor: (item.isLost ? Colors.red : Colors.green).withValues(alpha: 0.15),
+                strokeColor: (item.isLost ? Colors.red : Colors.green).withValues(alpha: 0.5),
+                strokeWidth: 1,
+              ),
+          },
           markers: {
             for (final item in items)
               Marker(
