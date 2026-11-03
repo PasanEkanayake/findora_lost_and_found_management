@@ -4,14 +4,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import 'items_map_view.dart';
+import '../../core/location/countries.dart';
+import '../../core/errors/friendly_error.dart';
+import '../../core/location/country_picker.dart';
+import '../../core/location/current_location.dart';
 import '../../core/providers/auth_providers.dart';
 import '../../core/widgets/item_photo.dart';
 import '../../core/widgets/new_badge.dart';
 import '../../core/widgets/shimmer_list.dart';
+import '../profile/data/profile_model.dart';
 import '../profile/data/profile_providers.dart';
 import '../items/data/category_model.dart';
+import '../items/data/feed_options.dart';
+import '../items/data/saved_search_repository.dart';
+import 'feed_filter_sheet.dart';
 import '../items/data/item_model.dart';
 import '../items/data/items_providers.dart';
 
@@ -53,28 +62,319 @@ class ItemFeedScreen extends ConsumerStatefulWidget {
   ConsumerState<ItemFeedScreen> createState() => _ItemFeedScreenState();
 }
 
-/// Home feed's lost/found switch. Applied to the already-fetched list
-/// rather than sent to the server: the hero header's "N lost · N found"
-/// counts need the *unfiltered* list, and switching this way is instant
-/// (no reload) since nothing has to be refetched.
+/// Home feed's lost/found switch. Sent to the server: the feed loads in pages
+/// of [kFeedPageSize], so filtering the loaded list on the phone would hide
+/// posts that just haven't been loaded yet. The "N lost · N found" totals
+/// come from their own query (`feed_counts()`), so they stay correct whichever
+/// tab is selected.
 enum _TypeFilter { all, lost, found }
 
 class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
   String? _selectedCategoryId;
   String _query = '';
   _TypeFilter _typeFilter = _TypeFilter.all;
+
+  // Browse options (see the filter sheet): how recent, and what order.
+  FeedWindow _window = FeedWindow.any;
+  FeedSort _sort = FeedSort.newest;
+  // The phone's position (rounded to ~100 m) for "Nearest to me".
+  double? _nearLat;
+  double? _nearLng;
   Timer? _debounce;
+
+  // ---- paging -------------------------------------------------------------
+  // The provider holds the FIRST page; later pages live here, appended as the
+  // person scrolls, and are forgotten whenever the first page is (re)loaded or
+  // the filter changes.
+  final ScrollController _scroll = ScrollController();
+  final List<ItemModel> _extra = [];
+  bool _exhausted = false; // the server has nothing after what we have
+  bool _loadingMore = false;
+  bool _loadMoreFailed = false;
+  int _pagingGeneration = 0; // bumped on reset so a late response is ignored
+
+  /// Last data shown, so the header totals don't blink out while a filter
+  /// change is loading.
+  FeedPage? _lastPage;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+    // The profile may already be loaded (the listener below only fires on change).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final profile = ref.read(myProfileProvider).value;
+      if (mounted && profile != null && profile.countryCode == null) {
+        _promptForHomeCountry();
+      }
+    });
+  }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  ItemsFilter get _currentFilter => ItemsFilter(
+        categoryId: _selectedCategoryId,
+        searchQuery: _query,
+        // Browse shows one country's posts (supabase/26_country.sql).
+        country: ref.read(myCountryProvider),
+        window: _window,
+        sort: _sort,
+        nearLat: _sort == FeedSort.nearest ? _nearLat : null,
+        nearLng: _sort == FeedSort.nearest ? _nearLng : null,
+        type: switch (_typeFilter) {
+          _TypeFilter.all => null,
+          _TypeFilter.lost => 'lost',
+          _TypeFilter.found => 'found',
+        },
+      );
+
+  /// Forget everything loaded past the first page. Call inside setState.
+  void _resetPaging() {
+    _pagingGeneration++;
+    _extra.clear();
+    _exhausted = false;
+    _loadingMore = false;
+    _loadMoreFailed = false;
+  }
+
+  void _onScroll() {
+    if (_scroll.hasClients && _scroll.position.extentAfter < 600) {
+      _loadMore();
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final filter = _currentFilter;
+    final page = ref.read(itemsFeedProvider(filter)).value;
+    if (page == null || _loadingMore || _exhausted || _loadMoreFailed) return;
+    // A first page that isn't full means that was everything.
+    if (page.items.length < kFeedPageSize) return;
+
+    final all = [...page.items, ..._extra];
+    final generation = _pagingGeneration;
+    setState(() {
+      _loadingMore = true;
+      _loadMoreFailed = false;
+    });
+    try {
+      final repo = ref.read(itemsRepositoryProvider);
+      final nearest = filter.sort == FeedSort.nearest &&
+          filter.nearLat != null &&
+          filter.nearLng != null;
+      final more = nearest
+          // Distance has no timestamp cursor, so this one pages by count.
+          ? await repo.fetchNearestItems(
+              lat: filter.nearLat!,
+              lng: filter.nearLng!,
+              categoryId: filter.categoryId,
+              searchQuery: filter.searchQuery,
+              type: filter.type,
+              country: filter.country,
+              window: filter.window,
+              limit: kFeedPageSize,
+              offset: all.length,
+            )
+          : await repo.fetchOpenItems(
+              categoryId: filter.categoryId,
+              searchQuery: filter.searchQuery,
+              type: filter.type,
+              country: filter.country,
+              window: filter.window,
+              oldestFirst: filter.sort == FeedSort.oldest,
+              // Continue from the last post in whichever direction the list runs.
+              before: filter.sort == FeedSort.oldest ? null : all.last.createdAt,
+              after: filter.sort == FeedSort.oldest ? all.last.createdAt : null,
+              limit: kFeedPageSize,
+            );
+      if (!mounted || generation != _pagingGeneration) return;
+      final known = {for (final item in all) item.id};
+      setState(() {
+        _extra.addAll(more.where((item) => !known.contains(item.id)));
+        if (more.length < kFeedPageSize) _exhausted = true;
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (!mounted || generation != _pagingGeneration) return;
+      setState(() {
+        _loadingMore = false;
+        _loadMoreFailed = true; // shows a Retry button instead of looping
+      });
+    }
+  }
+
+  /// The row under the list: a spinner while the next page loads, a retry
+  /// button if that failed, and always enough room to clear the floating
+  /// "Report item" button.
+  Widget _buildFooter(FeedPage? page) {
+    if (page == null || page.items.isEmpty) {
+      return const SliverToBoxAdapter(child: SizedBox.shrink());
+    }
+    final hasMore = page.items.length >= kFeedPageSize && !_exhausted;
+    final Widget content;
+    if (_loadingMore) {
+      content = const SizedBox(
+        height: 28,
+        width: 28,
+        child: CircularProgressIndicator(strokeWidth: 3),
+      );
+    } else if (_loadMoreFailed) {
+      content = TextButton.icon(
+        onPressed: () {
+          setState(() => _loadMoreFailed = false);
+          _loadMore();
+        },
+        icon: const Icon(Icons.refresh),
+        label: const Text("Couldn't load more — tap to retry"),
+      );
+    } else if (hasMore) {
+      content = const SizedBox(height: 28); // scrolling near here loads the next page
+    } else {
+      content = const SizedBox.shrink();
+    }
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+        child: Center(child: content),
+      ),
+    );
+  }
+
+  /// How the current search reads, or null when there's nothing worth saving
+  /// (no words and no category) or no country to save it for.
+  String? _saveDescription() {
+    final words = _query.trim();
+    final country = ref.read(myCountryProvider);
+    if ((words.isEmpty && _selectedCategoryId == null) || country == null) return null;
+    String? categoryName;
+    for (final category in ref.read(categoriesProvider).value ?? const <CategoryModel>[]) {
+      if (category.id == _selectedCategoryId) categoryName = category.name;
+    }
+    return SavedSearch.describe(
+      query: words,
+      categoryName: categoryName,
+      type: switch (_typeFilter) {
+        _TypeFilter.all => null,
+        _TypeFilter.lost => 'lost',
+        _TypeFilter.found => 'found',
+      },
+      countryCode: country,
+    );
+  }
+
+  Future<void> _openFilters() async {
+    final result = await showFeedFilterSheet(
+      context,
+      window: _window,
+      sort: _sort,
+      saveDescription: _saveDescription(),
+    );
+    if (result == null || !mounted) return;
+    await _applyOptions(result.window, result.sort);
+    if (!mounted) return;
+    switch (result.action) {
+      case FeedFilterAction.apply:
+        break;
+      case FeedFilterAction.save:
+        await _saveCurrentSearch();
+      case FeedFilterAction.manage:
+        context.push('/profile/saved-searches');
+    }
+  }
+
+  Future<void> _applyOptions(FeedWindow window, FeedSort sort) async {
+    final messenger = ScaffoldMessenger.of(context);
+    var effectiveSort = sort;
+    if (sort == FeedSort.nearest) {
+      final position = await getCurrentPositionOrNull();
+      if (!mounted) return;
+      if (position == null) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text("Couldn't get your location, so posts are shown newest first."),
+          ),
+        );
+        effectiveSort = FeedSort.newest;
+      } else {
+        // ~100 m: enough for "nearest", and keeps the list from reloading
+        // every time the GPS wobbles.
+        _nearLat = (position.latitude * 1000).round() / 1000;
+        _nearLng = (position.longitude * 1000).round() / 1000;
+      }
+    }
+    setState(() {
+      _window = window;
+      _sort = effectiveSort;
+      _resetPaging();
+    });
+  }
+
+  Future<void> _saveCurrentSearch() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final country = ref.read(myCountryProvider);
+    if (country == null) return;
+    try {
+      await ref.read(savedSearchRepositoryProvider).create(
+            query: _query,
+            categoryId: _selectedCategoryId,
+            type: switch (_typeFilter) {
+              _TypeFilter.all => null,
+              _TypeFilter.lost => 'lost',
+              _TypeFilter.found => 'found',
+            },
+            countryCode: country,
+          );
+      ref.invalidate(savedSearchesProvider);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text("Saved. You'll get an alert when a new post matches."),
+        ),
+      );
+    } on PostgrestException catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            e.code == '23505'
+                ? "You've already saved this search."
+                : friendlyDatabaseError(e, fallback: "Couldn't save the search. Try again."),
+          ),
+        ),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Couldn't save the search. Try again.")),
+      );
+    }
+  }
+
+  bool _askedForCountry = false;
+
+  Future<void> _promptForHomeCountry() async {
+    if (_askedForCountry || !mounted) return;
+    _askedForCountry = true;
+    final picked = await showCountryPicker(
+      context,
+      selected: ref.read(myCountryProvider),
+      title: 'Where are you based? Browse shows posts from your country.',
+    );
+    if (picked == null || !mounted) return;
+    try {
+      await ref.read(profileRepositoryProvider).updateCountry(picked);
+      ref.invalidate(myProfileProvider);
+    } catch (_) {}
   }
 
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), () {
-      setState(() => _query = value);
+      setState(() {
+        _query = value;
+        _resetPaging();
+      });
     });
   }
 
@@ -90,7 +390,10 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final filter = ItemsFilter(categoryId: _selectedCategoryId, searchQuery: _query);
+    // Watched so that changing the country (profile or the chip below) reloads
+    // the feed; _currentFilter reads the same value.
+    final country = ref.watch(myCountryProvider);
+    final filter = _currentFilter;
     final categoriesAsync = ref.watch(categoriesProvider);
     final profileAsync = ref.watch(myProfileProvider);
     final isSignedIn = ref.watch(currentUserProvider) != null;
@@ -133,6 +436,19 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
     }
 
     final itemsAsync = ref.watch(itemsFeedProvider(filter));
+    // Fresh first page (first load, pull-to-refresh, or a post/edit/delete
+    // elsewhere invalidating the feed) -> drop any later pages loaded before.
+    ref.listen<AsyncValue<FeedPage>>(itemsFeedProvider(filter), (previous, next) {
+      if (next is AsyncData<FeedPage>) setState(_resetPaging);
+    });
+    // A person with no home country yet (an older account, or Google sign-in)
+    // is asked once per session where they are based.
+    ref.listen<AsyncValue<ProfileModel>>(myProfileProvider, (previous, next) {
+      final profile = next.value;
+      if (profile != null && profile.countryCode == null) _promptForHomeCountry();
+    });
+    final shownPage = itemsAsync.value ?? _lastPage;
+    if (itemsAsync.value != null) _lastPage = itemsAsync.value;
     final firstName = isSignedIn
         ? profileAsync.maybeWhen(
             data: (p) => (p.fullName?.trim().isNotEmpty ?? false)
@@ -142,23 +458,36 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
           )
         : null;
 
-    final lostCount = itemsAsync.maybeWhen(
-      data: (items) => items.where((i) => i.isLost).length,
-      orElse: () => null,
-    );
-    final foundCount = itemsAsync.maybeWhen(
-      data: (items) => items.where((i) => !i.isLost).length,
-      orElse: () => null,
-    );
+    final lostCount = shownPage?.lostCount;
+    final foundCount = shownPage?.foundCount;
 
     return Scaffold(
       body: RefreshIndicator(
         onRefresh: () => ref.refresh(itemsFeedProvider(filter).future),
         child: CustomScrollView(
+          controller: _scroll,
           slivers: [
             SliverAppBar(
               pinned: true,
               expandedHeight: 208,
+              // Top-left: the flag of the country Browse is showing. Tap for
+              // the country settings (change it for good, or for a trip).
+              leading: Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: IconButton(
+                  tooltip: country == null
+                      ? 'Choose your country'
+                      : 'Browsing ${countryName(country)} — tap to change',
+                  onPressed: () => context.push('/profile/country'),
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.white.withValues(alpha: 0.18),
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: country == null
+                      ? const Icon(Icons.public)
+                      : Text(flagEmoji(country), style: const TextStyle(fontSize: 22)),
+                ),
+              ),
               actions: [
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
@@ -190,6 +519,16 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                         decoration: InputDecoration(
                           hintText: 'Search by item, place, or keyword',
                           prefixIcon: const Icon(Icons.search),
+                          suffixIcon: IconButton(
+                            tooltip: 'Filter, sort and saved searches',
+                            onPressed: _openFilters,
+                            icon: Badge(
+                              smallSize: 8,
+                              isLabelVisible:
+                                  _window != FeedWindow.any || _sort != FeedSort.newest,
+                              child: const Icon(Icons.tune),
+                            ),
+                          ),
                           fillColor: theme.colorScheme.surfaceContainerHighest,
                         ),
                       ),
@@ -198,7 +537,10 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                         selected: _typeFilter,
                         lostCount: lostCount,
                         foundCount: foundCount,
-                        onChanged: (value) => setState(() => _typeFilter = value),
+                        onChanged: (value) => setState(() {
+                          _typeFilter = value;
+                          _resetPaging();
+                        }),
                       ),
                       const SizedBox(height: 12),
                       SizedBox(
@@ -209,7 +551,10 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                           data: (categories) => _CategoryChipRow(
                             categories: categories,
                             selectedId: _selectedCategoryId,
-                            onSelect: (id) => setState(() => _selectedCategoryId = id),
+                            onSelect: (id) => setState(() {
+                              _selectedCategoryId = id;
+                              _resetPaging();
+                            }),
                           ),
                         ),
                       ),
@@ -229,28 +574,28 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                   body: 'Check your connection and pull down to try again.',
                 ),
               ),
-              data: (allItems) {
-                final items = switch (_typeFilter) {
-                  _TypeFilter.all => allItems,
-                  _TypeFilter.lost => allItems.where((i) => i.isLost).toList(),
-                  _TypeFilter.found => allItems.where((i) => !i.isLost).toList(),
-                };
+              data: (page) {
+                // Type filtering already happened on the server.
+                final items = [...page.items, ..._extra];
                 if (items.isEmpty) {
                   final hasFilter = _selectedCategoryId != null ||
                       _query.isNotEmpty ||
-                      _typeFilter != _TypeFilter.all;
+                      _typeFilter != _TypeFilter.all ||
+                      _window != FeedWindow.any;
                   return SliverFillRemaining(
                     child: _FeedMessage(
                       icon: Icons.search_off,
                       title: 'Nothing here yet',
                       body: hasFilter
-                          ? 'Try a different search, category, or switch back to All.'
+                          ? 'Try a different search, category, or time window, or switch back to All.'
                           : 'Be the first to report a lost or found item.',
                     ),
                   );
                 }
                 return SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+                  // Bottom room lives in the footer sliver below, so it comes
+                  // after the "loading more" row rather than before it.
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                   sliver: SliverList.separated(
                     itemCount: items.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -259,6 +604,7 @@ class _ItemFeedScreenState extends ConsumerState<ItemFeedScreen> {
                 );
               },
             ),
+            _buildFooter(itemsAsync.value),
           ],
         ),
       ),
@@ -565,7 +911,10 @@ class _ItemCard extends StatelessWidget {
                   width: 72,
                   height: 72,
                   child: ItemPhoto(
-                    url: item.imageUrls.isEmpty ? null : item.imageUrls.first,
+                    url: item.thumbnailUrl,
+                    semanticLabel: 'Photo of ${item.title}',
+                    // Shown at 72 dp: ~3x for sharp screens, not a full-size bitmap.
+                    cacheWidth: 220,
                   ),
                 ),
               ),
