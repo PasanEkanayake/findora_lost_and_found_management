@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'claim_attempt_status.dart';
 import 'claim_model.dart';
 import 'claims_repository.dart';
 
@@ -15,7 +16,12 @@ class ChatLifecycleStatus {
     required this.claim,
     required this.itemStatus,
     required this.iHaveRated,
+    this.attempts,
   });
+
+  /// The claimant's attempts on this post (null for the finder, or when the
+  /// database doesn't report them).
+  final ClaimAttemptStatus? attempts;
 
   final ClaimModel? claim;
   final String itemStatus; // 'open' | 'matched' | 'claimed' | 'resolved'
@@ -54,5 +60,14 @@ final chatLifecycleProvider = FutureProvider.autoDispose
   final rated = status == 'resolved'
       ? await repo.hasRated(itemId: params.foundItemId, raterId: params.myId)
       : false;
-  return ChatLifecycleStatus(claim: claim, itemStatus: status, iHaveRated: rated);
+  // Only the person who can claim needs their attempt count.
+  final attempts = params.claimantId == params.myId
+      ? await repo.fetchAttemptStatus(params.foundItemId)
+      : null;
+  return ChatLifecycleStatus(
+    claim: claim,
+    itemStatus: status,
+    iHaveRated: rated,
+    attempts: attempts,
+  );
 });
