@@ -1,5 +1,6 @@
 import '../../../core/constants/app_constants.dart';
 import '../../../core/supabase/supabase_client.dart';
+import 'claim_attempt_status.dart';
 import 'claim_model.dart';
 
 /// Data access for the claim → approve → mark-returned → rate lifecycle
@@ -21,6 +22,21 @@ class ClaimsRepository {
         .limit(1);
     if (rows.isEmpty) return null;
     return ClaimModel.fromMap(rows.first);
+  }
+
+  /// How many of the caller's claim attempts on [itemId] are used, and any wait
+  /// before the next — `claim_attempt_status()`, supabase/38_claim_attempt_limit.sql.
+  /// Null if the database doesn't have that function yet (older setup): the
+  /// app then simply shows no attempt counts, and nothing else changes.
+  Future<ClaimAttemptStatus?> fetchAttemptStatus(String itemId) async {
+    try {
+      final rows = await supabase.rpc('claim_attempt_status', params: {'p_item_id': itemId})
+          as List<dynamic>;
+      if (rows.isEmpty) return null;
+      return ClaimAttemptStatus.fromMap(rows.first as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> fileClaim({required String itemId, required String verificationAnswer}) async {
@@ -61,18 +77,19 @@ class ClaimsRepository {
     });
   }
 
+  /// [itemId] is the FOUND post of the returned pair. Who gets rated is
+  /// worked out by the database from the return itself (the other person in
+  /// it) — it is not something the app can choose — see `submit_rating()` in
+  /// supabase/17_harden_policies.sql.
   Future<void> submitRating({
     required String itemId,
-    required String rateeId,
     required int stars,
     String? comment,
   }) async {
-    await supabase.from(AppConstants.ratingsTable).insert({
-      'item_id': itemId,
-      'rater_id': supabase.auth.currentUser!.id,
-      'ratee_id': rateeId,
-      'stars': stars,
-      'comment': comment,
+    await supabase.rpc('submit_rating', params: {
+      'p_item_id': itemId,
+      'p_stars': stars,
+      'p_comment': comment,
     });
   }
 
