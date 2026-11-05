@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/ml/text_embedding_service.dart';
 import 'category_model.dart';
+import 'feed_options.dart';
 import 'item_model.dart';
+import 'saved_search_repository.dart';
 import 'items_repository.dart';
 import 'nearby_item_model.dart';
 import 'returned_item_model.dart';
@@ -27,19 +29,69 @@ final categoriesProvider = FutureProvider<List<CategoryModel>>((ref) {
 /// `.family` can tell two filter combinations apart and cache/refetch
 /// per-combination rather than per-widget.
 class ItemsFilter {
-  const ItemsFilter({this.categoryId, this.searchQuery});
+  const ItemsFilter({
+    this.categoryId,
+    this.searchQuery,
+    this.type,
+    this.country,
+    this.window = FeedWindow.any,
+    this.sort = FeedSort.newest,
+    this.nearLat,
+    this.nearLng,
+  });
 
   final String? categoryId;
   final String? searchQuery;
+
+  /// 'lost' | 'found' | null for both. Sent to the server (the feed is paged,
+  /// so filtering the loaded list on the phone would hide posts that simply
+  /// haven't been loaded yet).
+  final String? type;
+
+  /// ISO country code — the feed only shows posts from one country.
+  final String? country;
+
+  /// "Posted within" and the sort order. [nearLat]/[nearLng] are the phone's
+  /// position (rounded, so the provider isn't rebuilt for every metre of
+  /// movement) and only matter for [FeedSort.nearest].
+  final FeedWindow window;
+  final FeedSort sort;
+  final double? nearLat;
+  final double? nearLng;
+
+  /// True when something other than the defaults is set (drives the dot on the
+  /// filter button).
+  bool get hasNonDefaultOptions => window != FeedWindow.any || sort != FeedSort.newest;
 
   @override
   bool operator ==(Object other) =>
       other is ItemsFilter &&
       other.categoryId == categoryId &&
-      other.searchQuery == searchQuery;
+      other.searchQuery == searchQuery &&
+      other.type == type &&
+      other.country == country &&
+      other.window == window &&
+      other.sort == sort &&
+      other.nearLat == nearLat &&
+      other.nearLng == nearLng;
 
   @override
-  int get hashCode => Object.hash(categoryId, searchQuery);
+  int get hashCode =>
+      Object.hash(categoryId, searchQuery, type, country, window, sort, nearLat, nearLng);
+}
+
+/// How many posts the feed loads per page.
+const kFeedPageSize = 20;
+
+/// The first page of the feed plus the totals shown in the Browse header.
+/// [lostCount]/[foundCount] are null if the database function behind them
+/// isn't installed yet.
+class FeedPage {
+  const FeedPage({required this.items, this.lostCount, this.foundCount});
+
+  final List<ItemModel> items;
+  final int? lostCount;
+  final int? foundCount;
 }
 
 /// autoDispose + manual `ref.invalidate(itemsFeedProvider)` after a
@@ -51,12 +103,44 @@ class ItemsFilter {
 ///
 /// Invalidating the bare `itemsFeedProvider` (no argument) invalidates
 /// every cached filter combination, which is what PostItemScreen relies on.
+///
+/// Only the FIRST page lives here, with the header totals fetched alongside
+/// it; the screen loads later pages itself as the person scrolls (and
+/// forgets them whenever this provider delivers fresh data, so every
+/// existing `ref.invalidate(itemsFeedProvider)` still refreshes the feed).
 final itemsFeedProvider =
-    FutureProvider.autoDispose.family<List<ItemModel>, ItemsFilter>((ref, filter) {
-  return ref.watch(itemsRepositoryProvider).fetchOpenItems(
-        categoryId: filter.categoryId,
-        searchQuery: filter.searchQuery,
-      );
+    FutureProvider.autoDispose.family<FeedPage, ItemsFilter>((ref, filter) async {
+  final repo = ref.watch(itemsRepositoryProvider);
+  final nearest = filter.sort == FeedSort.nearest && filter.nearLat != null && filter.nearLng != null;
+  final (items, counts) = await (
+    nearest
+        ? repo.fetchNearestItems(
+            lat: filter.nearLat!,
+            lng: filter.nearLng!,
+            categoryId: filter.categoryId,
+            searchQuery: filter.searchQuery,
+            type: filter.type,
+            country: filter.country,
+            window: filter.window,
+            limit: kFeedPageSize,
+          )
+        : repo.fetchOpenItems(
+            categoryId: filter.categoryId,
+            searchQuery: filter.searchQuery,
+            type: filter.type,
+            country: filter.country,
+            window: filter.window,
+            oldestFirst: filter.sort == FeedSort.oldest,
+            limit: kFeedPageSize,
+          ),
+    repo.fetchFeedCounts(
+      categoryId: filter.categoryId,
+      searchQuery: filter.searchQuery,
+      country: filter.country,
+      window: filter.window,
+    ),
+  ).wait;
+  return FeedPage(items: items, lostCount: counts?.lost, foundCount: counts?.found);
 });
 
 /// Parameter for [nearbyItemsProvider] — kept as a small local value type
@@ -95,11 +179,26 @@ final itemDetailProvider = FutureProvider.autoDispose.family<ItemModel, String>(
   return ref.watch(itemsRepositoryProvider).fetchItemById(id);
 });
 
-final itemCoordinatesProvider = FutureProvider.autoDispose
-    .family<({double latitude, double longitude})?, String>((ref, itemId) {
+/// The signed-in owner's own expected answer for a found post's proof
+/// question (null for everyone else, and when none was set).
+final proofAnswerProvider = FutureProvider.autoDispose.family<String?, String>((ref, itemId) {
+  return ref.watch(itemsRepositoryProvider).fetchProofAnswer(itemId);
+});
+
+final itemCoordinatesProvider =
+    FutureProvider.autoDispose.family<ItemCoordinates?, String>((ref, itemId) {
   return ref.watch(itemsRepositoryProvider).fetchItemCoordinates(itemId);
 });
 
 final myItemsProvider = FutureProvider.autoDispose<List<ItemModel>>((ref) {
   return ref.watch(itemsRepositoryProvider).fetchMyItems();
+});
+
+final savedSearchRepositoryProvider = Provider<SavedSearchRepository>((ref) {
+  return const SavedSearchRepository();
+});
+
+/// The signed-in person's saved searches, newest first.
+final savedSearchesProvider = FutureProvider.autoDispose<List<SavedSearch>>((ref) {
+  return ref.watch(savedSearchRepositoryProvider).fetchAll();
 });
