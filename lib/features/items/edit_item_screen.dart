@@ -6,13 +6,19 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/errors/friendly_error.dart';
+import '../../core/location/countries.dart';
 import '../../core/location/location_picker_screen.dart';
+import '../../core/widgets/approximate_location_note.dart';
 import '../../core/ml/tflite_classifier.dart';
 import '../../core/ml/tflite_provider.dart';
 import '../matches/data/matches_providers.dart';
 import 'data/item_model.dart';
 import 'data/items_providers.dart';
+import 'data/items_repository.dart' show ItemCoordinates;
+import 'widgets/country_field.dart';
 import 'widgets/photo_strip.dart';
+import 'widgets/proof_question_fields.dart';
 
 /// Editing an existing item — title, description, category, location, event
 /// time and **photos** (add, remove, or replace). Not the lost-vs-found
@@ -33,10 +39,19 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleController;
   late final TextEditingController _descriptionController;
+  late final TextEditingController _proofQuestionController;
+  final _proofAnswerController = TextEditingController();
+
+  /// The expected answer is read from an owner-only table after the form
+  /// opens. Until it has loaded, saving must not touch it (an empty box would
+  /// otherwise wipe the real answer).
+  bool _proofAnswerLoaded = false;
   String? _categoryId;
   double? _latitude;
   double? _longitude;
   String? _locationLabel;
+  String? _countryCode; // compulsory — older posts without one must be given one to save
+  bool _countryIsAuto = false;
   DateTime? _eventTime;
   bool _isSaving = false;
   bool _coordsLoaded = false;
@@ -63,8 +78,17 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
     ref.read(textEmbeddingServiceProvider).warmUp();
     _titleController = TextEditingController(text: widget.item.title);
     _descriptionController = TextEditingController(text: widget.item.description ?? '');
+    _proofQuestionController = TextEditingController(text: widget.item.proofQuestion ?? '');
+    if (!widget.item.isLost) {
+      ref.read(proofAnswerProvider(widget.item.id).future).then((answer) {
+        if (!mounted) return;
+        _proofAnswerController.text = answer ?? '';
+        setState(() => _proofAnswerLoaded = true);
+      }).catchError((_) {});
+    }
     _categoryId = widget.item.categoryId;
     _locationLabel = widget.item.locationLabel;
+    _countryCode = widget.item.countryCode;
     _eventTime = widget.item.eventTime;
   }
 
@@ -72,6 +96,8 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
+    _proofQuestionController.dispose();
+    _proofAnswerController.dispose();
     super.dispose();
   }
 
@@ -173,7 +199,7 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
   /// serialize predictably over a plain select), so they arrive a beat
   /// after the rest of the form. Cheap to just prime local state once
   /// they land rather than re-fetching every rebuild.
-  void _primeCoordsOnce(({double latitude, double longitude})? coords) {
+  void _primeCoordsOnce(ItemCoordinates? coords) {
     if (_coordsLoaded || coords == null) return;
     _coordsLoaded = true;
     _latitude = coords.latitude;
@@ -198,6 +224,12 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
       _latitude = picked.latitude;
       _longitude = picked.longitude;
       _locationLabel = picked.label;
+      // A pin in another country moves the post there, unless they chose by hand.
+      final iso = picked.countryCode?.toUpperCase();
+      if (iso != null && isKnownCountry(iso) && (_countryCode == null || _countryIsAuto)) {
+        _countryCode = iso;
+        _countryIsAuto = true;
+      }
     });
   }
 
@@ -257,9 +289,17 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
         eventTime: _eventTime,
         textChanged: textChanged,
         textEmbedding: textEmbedding,
+        countryCode: _countryCode,
+        isFound: !widget.item.isLost,
+        proofQuestion: _proofQuestionController.text,
+        // null = leave the stored answer alone (it hadn't finished loading).
+        proofAnswer: _proofAnswerLoaded ? _proofAnswerController.text : null,
       );
-    } catch (_) {
-      _showMessage("Couldn't save changes. Try again.", isError: true);
+    } catch (e) {
+      _showMessage(
+        friendlyDatabaseError(e, fallback: "Couldn't save changes. Try again."),
+        isError: true,
+      );
       if (mounted) setState(() => _isSaving = false);
       return;
     }
@@ -385,6 +425,7 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
             const SizedBox(height: 20),
             TextFormField(
               controller: _titleController,
+              maxLength: 120,
               decoration: const InputDecoration(labelText: 'Title'),
               validator: (v) => (v == null || v.trim().isEmpty) ? 'Title is required' : null,
             ),
@@ -393,7 +434,15 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
               controller: _descriptionController,
               decoration: const InputDecoration(labelText: 'Description'),
               maxLines: 4,
+              maxLength: 2000,
             ),
+            if (!widget.item.isLost) ...[
+              const SizedBox(height: 16),
+              ProofQuestionFields(
+                questionController: _proofQuestionController,
+                answerController: _proofAnswerController,
+              ),
+            ],
             const SizedBox(height: 16),
             categoriesAsync.when(
               loading: () => const LinearProgressIndicator(),
@@ -418,6 +467,15 @@ class _EditItemScreenState extends ConsumerState<EditItemScreen> {
               onPressed: _adjustLocationOnMap,
               icon: const Icon(Icons.edit_location_alt_outlined),
               label: Text(_locationLabel ?? 'Set location'),
+            ),
+            const ApproximateLocationNote(),
+            const SizedBox(height: 16),
+            CountryField(
+              value: _countryCode,
+              onChanged: (code) => setState(() {
+                _countryCode = code;
+                _countryIsAuto = false;
+              }),
             ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
