@@ -9,10 +9,14 @@ import '../chat/chat_screen.dart';
 import '../contact/contact_chat_screen.dart';
 import '../contact/data/contact_providers.dart';
 import '../matches/data/matches_providers.dart';
+import '../../core/errors/friendly_error.dart';
+import '../../core/location/approximate_area.dart';
 import '../../core/providers/auth_providers.dart';
 import '../../core/widgets/confirm_dialog.dart';
 import '../../core/widgets/item_photo.dart';
 import '../../core/widgets/new_badge.dart';
+import 'widgets/item_expiry_banner.dart';
+import 'widgets/share_post_button.dart';
 import 'data/item_model.dart';
 import 'data/items_providers.dart';
 
@@ -31,6 +35,10 @@ class ItemDetailScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         actions: [
+          itemAsync.maybeWhen(
+            data: (item) => SharePostButton(item: item),
+            orElse: () => const SizedBox.shrink(),
+          ),
           itemAsync.maybeWhen(
             data: (item) => item.userId == myId
                 ? _OwnerMenu(item: item)
@@ -264,13 +272,19 @@ class _ContactBar extends ConsumerWidget {
           threadId: threadId,
           itemId: item.id,
           itemTitle: item.title,
+          otherUserId: item.userId,
           otherUserName: item.posterName ?? 'Findora user',
         ),
       );
-    } catch (_) {
+    } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("Couldn't start that conversation.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            friendlyDatabaseError(e, fallback: "Couldn't start that conversation."),
+          ),
+        ),
+      );
     }
   }
 
@@ -303,7 +317,33 @@ class _ContactBar extends ConsumerWidget {
       );
     }
 
-    final matchesAsync = ref.watch(matchesProvider);
+    // An expired post is no longer active (supabase/35_post_expiry.sql): the
+    // server refuses new conversations about it, so don't offer any.
+    if (item.isExpired) {
+      final theme = Theme.of(context);
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              Icon(Icons.timer_off_outlined, color: theme.colorScheme.onSurfaceVariant),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'This post has expired, so it can no longer be contacted.',
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Only a confirmed match between this post and one of mine matters here.
+    final matchesAsync = ref.watch(
+      matchesProvider(MatchesQuery(section: 'confirmed', itemId: item.id)),
+    );
 
     return SafeArea(
       child: Padding(
@@ -315,8 +355,8 @@ class _ContactBar extends ConsumerWidget {
           ),
           error: (_, __) =>
               _ContactOnlyActions(item: item, onContact: () => _startContact(context, ref)),
-          data: (matches) {
-            final confirmed = matches.where(
+          data: (page) {
+            final confirmed = page.items.where(
               (m) => m.matchedItemId == item.id && m.status == 'confirmed',
             );
             final relevantMatch = confirmed.isEmpty ? null : confirmed.first;
@@ -404,6 +444,8 @@ class _ItemDetailBodyState extends State<_ItemDetailBody> {
     return ListView(
       padding: EdgeInsets.zero,
       children: [
+        // Owner only: "expires in N days" / "expired", with Keep it up / Renew.
+        ItemExpiryBanner(item: item),
         if (item.imageUrls.isEmpty)
           const SizedBox(
             height: 280,
@@ -626,22 +668,22 @@ class _PossibleMatchesSection extends ConsumerWidget {
     if (item.status == 'resolved') return const SizedBox.shrink();
 
     final isOwner = item.userId == myId;
-    final matchesAsync = ref.watch(matchesProvider);
+    final matchesAsync = ref.watch(matchesProvider(MatchesQuery(itemId: item.id)));
 
     return matchesAsync.when(
       // A brief loading flash isn't worth showing its own spinner for —
       // the section just appears a moment after the rest of the page.
       loading: () => const SizedBox.shrink(),
       error: (_, __) => const SizedBox.shrink(),
-      data: (matches) {
-        final relevant =
-            matches.where((m) => m.myItemId == item.id || m.matchedItemId == item.id).toList();
+      data: (page) {
+        // The server already narrowed this to matches involving this post.
+        final relevant = page.items;
         if (!isOwner && relevant.isEmpty) return const SizedBox.shrink();
 
         final theme = Theme.of(context);
         final subtitle = relevant.isEmpty
             ? (isOwner ? 'None yet — the AI checks automatically' : null)
-            : '${relevant.length} possible match${relevant.length == 1 ? '' : 'es'}'
+            : '${relevant.length}${page.hasMore ? '+' : ''} possible match${relevant.length == 1 && !page.hasMore ? '' : 'es'}'
                 '${isOwner ? '' : ' with one of your posts'}';
 
         return InkWell(
@@ -696,22 +738,55 @@ class _LocationPreview extends ConsumerWidget {
       data: (coords) {
         if (coords == null) return const SizedBox.shrink();
         final position = LatLng(coords.latitude, coords.longitude);
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: SizedBox(
-            height: 140,
-            child: IgnorePointer(
-              // A preview, not an interactive map — the full map view
-              // (Browse tab) is where panning/zooming actually matters.
-              child: GoogleMap(
-                initialCameraPosition: CameraPosition(target: position, zoom: 14),
-                markers: {Marker(markerId: const MarkerId('item'), position: position)},
-                zoomControlsEnabled: false,
-                myLocationButtonEnabled: false,
-                liteModeEnabled: true,
+        final theme = Theme.of(context);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: SizedBox(
+                height: 140,
+                child: IgnorePointer(
+                  // A preview, not an interactive map — the full map view
+                  // (Browse tab) is where panning/zooming actually matters.
+                  child: GoogleMap(
+                    initialCameraPosition: CameraPosition(target: position, zoom: 14),
+                    // The owner sees their exact pin. Everyone else gets an
+                    // area: the position is only approximate, and a pin
+                    // would claim a precision it doesn't have.
+                    markers: coords.isExact
+                        ? {Marker(markerId: const MarkerId('item'), position: position)}
+                        : const <Marker>{},
+                    circles: coords.isExact
+                        ? const <Circle>{}
+                        : {
+                            Circle(
+                              circleId: const CircleId('approximate'),
+                              center: position,
+                              radius: approximateAreaRadiusMeters,
+                              fillColor: theme.colorScheme.primary.withValues(alpha: 0.2),
+                              strokeColor: theme.colorScheme.primary,
+                              strokeWidth: 2,
+                            ),
+                          },
+                    zoomControlsEnabled: false,
+                    myLocationButtonEnabled: false,
+                    liteModeEnabled: true,
+                  ),
+                ),
               ),
             ),
-          ),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                coords.isExact
+                    ? 'The exact spot you pinned. Other people only see an approximate area.'
+                    : 'Approximate area — the exact spot is only shown to the poster.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ],
         );
       },
     );
