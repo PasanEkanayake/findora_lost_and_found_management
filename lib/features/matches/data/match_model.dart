@@ -1,6 +1,53 @@
 /// Mirrors one row returned by the `my_matches()` Postgres function, which
 /// already resolves "my item" vs "the matched item" from the caller's
 /// perspective — see supabase/02_functions_and_triggers.sql.
+/// How much to trust a match. The percentage is a calibrated *evidence score*,
+/// not a probability, so the app leads with the tier. Mirrors the thresholds
+/// described in supabase/18_calibrated_match_score.sql — if you change one,
+/// change the other.
+enum MatchTier {
+  strong('Strong'),
+  likely('Likely'),
+  possible('Possible');
+
+  const MatchTier(this.label);
+
+  final String label;
+
+  static const double strongFrom = 0.80;
+  static const double likelyFrom = 0.55;
+
+  static MatchTier fromScore(double score) {
+    if (score >= strongFrom) return strong;
+    if (score >= likelyFrom) return likely;
+    return possible;
+  }
+}
+
+/// The Matches tab's filter chips. Applied on the server (the list is paged,
+/// so filtering what's already on the phone would hide matches that simply
+/// haven't been loaded yet).
+enum MatchFilter {
+  all('all'),
+  imageOnly('image'),
+  textOnly('text'),
+  both('both'),
+  nearby('nearby'),
+  time('time');
+
+  const MatchFilter(this.rpcValue);
+
+  /// The `p_filter` value `my_matches_page()` understands.
+  final String rpcValue;
+}
+
+/// The minimum photo similarity at which two photos count as "agreeing" —
+/// matching_threshold() in the database (supabase/11_realtime_and_matching_fixes.sql).
+const double kImageAgreesFrom = 0.60;
+
+/// The minimum wording similarity that counts as "agreeing".
+const double kTextAgreesFrom = 0.50;
+
 class MatchModel {
   const MatchModel({
     required this.matchId,
@@ -19,6 +66,9 @@ class MatchModel {
     this.textSimilarity,
     this.distanceMeters,
     this.timeProximity,
+    this.myDecision,
+    this.otherConfirmed = false,
+    this.reopenable = true,
   });
 
   final String matchId;
@@ -30,9 +80,9 @@ class MatchModel {
   final String matchedItemUserId;
   final String? matchedItemImageUrl;
 
-  /// The caller's own item's first photo. Not part of `my_matches()`'s
-  /// output — MatchesRepository looks it up separately so the match card can
-  /// show both items side by side. Null if the item has no photo.
+  /// The caller's own item's first photo (`my_matches_page()` returns it so
+  /// the match card can show both items side by side). Null if the item has
+  /// no photo.
   final String? myItemImageUrl;
 
   /// The blended score shown as "XX% match" — see combined_match_score()
@@ -55,10 +105,43 @@ class MatchModel {
   /// _ScoreBreakdown/MatchesScreen for where this becomes a human-readable
   /// "close in time" label instead of a raw score.
   final double? timeProximity;
+  /// The overall state. 'confirmed' means BOTH people confirmed (that is what
+  /// opens the chat); 'dismissed' means either said "Not a match"; 'pending'
+  /// is everything else, including "I confirmed, they haven't yet".
   final String status; // 'pending' | 'confirmed' | 'dismissed'
   final DateTime createdAt;
 
+  /// My own decision: null (none yet), 'confirmed' or 'dismissed'.
+  final String? myDecision;
+
+  /// True when the OTHER person has confirmed. Only "confirmed" is ever
+  /// shared with the other side — a "Not a match" simply ends the match.
+  final bool otherConfirmed;
+
+  /// Whether Undo does anything: false when the match is dismissed only
+  /// because the other person dismissed it (my Undo could not reopen it).
+  final bool reopenable;
+
+  /// Open, and I haven't decided: the Confirm / Not a match buttons show.
+  bool get needsMyInput => status == 'pending' && myDecision != 'confirmed';
+
+  /// I confirmed and we're waiting for the other person to do the same.
+  bool get waitingForOther => status == 'pending' && myDecision == 'confirmed';
+
+  /// The other person already confirmed — my "This is it!" makes it mutual.
+  bool get otherConfirmedFirst => needsMyInput && otherConfirmed;
+
   bool get matchedItemIsLost => matchedItemType == 'lost';
+
+  MatchTier get tier => MatchTier.fromScore(similarityScore);
+
+  /// A photo score is now recorded for EVERY pair whose posts both have an
+  /// analysed photo — including low ones, which are shown (they explain a low
+  /// match) — so "the photos agree" means the score clears the threshold, not
+  /// merely that it exists.
+  bool get photosAgree => imageSimilarity != null && imageSimilarity! >= kImageAgreesFrom;
+
+  bool get wordingAgrees => textSimilarity != null && textSimilarity! >= kTextAgreesFrom;
 
   /// Matches only ever pair a lost item with a found one, so my item is
   /// always the opposite type of the matched one.
@@ -74,7 +157,10 @@ class MatchModel {
       matchedItemType: map['matched_item_type'] as String,
       matchedItemUserId: map['matched_item_user_id'] as String,
       matchedItemImageUrl: map['matched_item_image_url'] as String?,
-      myItemImageUrl: myItemImageUrl,
+      myItemImageUrl: myItemImageUrl ?? map['my_item_image_url'] as String?,
+      myDecision: map['my_decision'] as String?,
+      otherConfirmed: (map['other_confirmed'] as bool?) ?? false,
+      reopenable: (map['reopenable'] as bool?) ?? true,
       similarityScore: (map['similarity_score'] as num).toDouble(),
       imageSimilarity: (map['image_similarity'] as num?)?.toDouble(),
       textSimilarity: (map['text_similarity'] as num?)?.toDouble(),
