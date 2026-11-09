@@ -4,6 +4,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../core/images/strip_metadata.dart';
+
 /// One thumbnail in a [PhotoStrip]: either a photo that's already saved on
 /// the server ([PhotoStripItem.remote], carrying its `item_images.id` so
 /// it can be removed later) or one the person just picked and hasn't
@@ -163,6 +165,30 @@ Future<File?> pickPhotoWithSheet(BuildContext context, ImagePicker picker) async
   );
   if (source == null) return null;
 
-  final picked = await picker.pickImage(source: source, imageQuality: 85);
-  return picked == null ? null : File(picked.path);
+  // Capped at 1600 px on the long edge: phone cameras produce 3-10 MB files
+  // that are far larger than any screen here needs (and than the 10 MB
+  // storage limit set in supabase/17_harden_policies.sql should ever see).
+  // The on-device model resizes to 224 px anyway, so matching is unaffected.
+  final picked = await picker.pickImage(
+    source: source,
+    imageQuality: 85,
+    maxWidth: 1600,
+    maxHeight: 1600,
+  );
+  if (picked == null) return null;
+
+  // Remove GPS/date/device metadata before the photo can go anywhere (it is
+  // stored in a public bucket) — see core/images/strip_metadata.dart. If the
+  // photo can't be cleaned it is NOT used: uploading it as-is would publish
+  // where it was taken.
+  try {
+    return await stripPhotoMetadata(File(picked.path));
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't use that photo. Try another one.")),
+      );
+    }
+    return null;
+  }
 }
