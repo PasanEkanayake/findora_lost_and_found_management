@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../chat/chat_screen.dart';
+import '../../../l10n/app_localizations.dart';
 import '../../../core/errors/friendly_error.dart';
 import '../../../core/supabase/supabase_client.dart';
 import '../../../core/widgets/confirm_dialog.dart';
@@ -40,87 +41,115 @@ class MatchCard extends ConsumerWidget {
 
   final MatchModel match;
 
-  Future<void> _act(WidgetRef ref, BuildContext context, String status) async {
+  Future<void> _act(WidgetRef ref, BuildContext context, String decision) async {
     // Grabbed *before* the await: once the match moves from "Needs your
-    // input" to "Already decided" this card is rebuilt under a different
+    // input" to another section this card is rebuilt under a different
     // parent, so this State's `context`/`ref` may be dead by the time the
     // person taps Undo on the snackbar. The messenger and container belong
     // to the app, not to this card, so they stay usable.
     final messenger = ScaffoldMessenger.of(context);
     final container = ProviderScope.containerOf(context);
-    final confirmed = status == 'confirmed';
+    // Strings are looked up now for the same reason: the AppLocalizations
+    // object stays valid after this card's context is gone.
+    final l10n = AppLocalizations.of(context);
+    final confirming = decision == 'confirmed';
 
     try {
-      await ref.read(matchesRepositoryProvider).updateStatus(match.matchId, status);
+      // A match only becomes 'confirmed' when BOTH people have confirmed, so
+      // the answer says what actually happened: mutual (chat open), still
+      // waiting on the other person, or dismissed.
+      final result = await ref.read(matchesRepositoryProvider).decide(match.matchId, decision);
       container.invalidate(matchesProvider);
-      if (confirmed) {
-        // A confirmed match is exactly what makes it show up in
+      if (result == 'confirmed') {
+        // A mutual match is exactly what makes it show up in
         // my_conversations(), so the chat list needs to know too.
         container.invalidate(conversationsProvider);
       }
+
+      final String message;
+      if (confirming && result == 'confirmed') {
+        message = l10n.matchSnackMutual;
+      } else if (confirming && result == 'pending') {
+        message = l10n.matchSnackConfirmedWaiting;
+      } else if (confirming) {
+        message = l10n.matchSnackPassedAlready;
+      } else {
+        message = l10n.matchSnackMarkedNotMatch;
+      }
+
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
-            content: Text(confirmed ? 'Match confirmed.' : 'Marked as not a match.'),
+            content: Text(message),
             duration: const Duration(seconds: 6),
             // Since Flutter 3.29 a SnackBar that has an action defaults to
             // `persist: true` (Material 3 spec) and ignores `duration` — it
             // stays until swiped away. Without this line the Undo bar would
             // never leave the screen.
             persist: false,
-            action: SnackBarAction(
-              label: 'Undo',
-              onPressed: () => _revert(
-                container: container,
-                messenger: messenger,
-                wasConfirmed: confirmed,
-              ),
-            ),
+            // Nothing to undo if the other person's "Not a match" beat mine.
+            action: (confirming && result == 'dismissed')
+                ? null
+                : SnackBarAction(
+                    label: l10n.commonUndo,
+                    onPressed: () => _revert(
+                      l10n: l10n,
+                      container: container,
+                      messenger: messenger,
+                      chatWasOpen: result == 'confirmed',
+                    ),
+                  ),
           ),
         );
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(
-          content: Text(friendlyDatabaseError(e, fallback: "Couldn't update this match. Try again.")),
+          content: Text(friendlyDatabaseError(e, fallback: l10n.matchSnackUpdateFailed)),
         ),
       );
     }
   }
 
-  /// Puts a decided match back to "pending" so it can be decided again.
-  /// Shared by the snackbar's Undo and the Undo button on decided cards.
+  /// Takes back MY decision (confirmed or dismissed) so I can decide again.
+  /// Shared by the snackbar's Undo and the Undo buttons on the cards.
+  ///
+  /// [chatWasOpen] is true when the match was mutual, so the chat is about to
+  /// disappear (and that needs the claim safety check first).
   ///
   /// Takes the container/messenger rather than a WidgetRef/BuildContext on
   /// purpose — see [_act].
   Future<void> _revert({
+    required AppLocalizations l10n,
     required ProviderContainer container,
     required ScaffoldMessengerState messenger,
-    required bool wasConfirmed,
+    required bool chatWasOpen,
   }) async {
     try {
-      if (wasConfirmed && await _hasProgressedPastConfirmation(container)) {
+      if (chatWasOpen && await _hasProgressedPastConfirmation(container)) {
         messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'A claim has already been filed for this match, so it can no longer be undone.',
-            ),
-          ),
+          SnackBar(content: Text(l10n.matchSnackClaimFiled)),
         );
         return;
       }
-      await container.read(matchesRepositoryProvider).updateStatus(match.matchId, 'pending');
+      final result = await container.read(matchesRepositoryProvider).decide(match.matchId, 'pending');
       container.invalidate(matchesProvider);
-      if (wasConfirmed) container.invalidate(conversationsProvider);
+      if (chatWasOpen) container.invalidate(conversationsProvider);
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
-          const SnackBar(content: Text('Undone — this match is back under "Needs your input".')),
+          SnackBar(
+            content: Text(
+              result == 'dismissed'
+                  ? l10n.matchSnackUndoneStaysDismissed
+                  : l10n.matchSnackUndoneBack,
+            ),
+          ),
         );
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(
-          content: Text(friendlyDatabaseError(e, fallback: "Couldn't undo that. Try again.")),
+          content: Text(friendlyDatabaseError(e, fallback: l10n.matchSnackUndoFailed)),
         ),
       );
     }
@@ -145,30 +174,31 @@ class MatchCard extends ConsumerWidget {
 
   /// The Undo button shown on an already-decided card.
   Future<void> _undoDecided(BuildContext context, WidgetRef ref) async {
-    final wasConfirmed = match.status == 'confirmed';
-    if (wasConfirmed) {
+    final l10n = AppLocalizations.of(context);
+    final chatWasOpen = match.status == 'confirmed';
+    if (chatWasOpen) {
       final ok = await showConfirmDialog(
         context,
         icon: Icons.undo,
-        title: 'Undo this confirmation?',
-        message: 'The chat for this match will be hidden for both of you, and the '
-            'match goes back to "Needs your input". Your messages are kept — '
-            'confirming again brings the chat back.',
-        confirmLabel: 'Undo',
+        title: l10n.matchUndoDialogTitle,
+        message: l10n.matchUndoDialogBody,
+        confirmLabel: l10n.commonUndo,
       );
       if (!ok || !context.mounted) return;
     }
     await _revert(
+      l10n: l10n,
       container: ProviderScope.containerOf(context),
       messenger: ScaffoldMessenger.of(context),
-      wasConfirmed: wasConfirmed,
+      chatWasOpen: chatWasOpen,
     );
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final isPending = match.status == 'pending';
+    final l10n = AppLocalizations.of(context);
+    final needsInput = match.needsMyInput;
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -216,7 +246,7 @@ class MatchCard extends ConsumerWidget {
               children: [
                 Expanded(
                   child: _MatchSide(
-                    caption: 'YOUR ITEM',
+                    caption: l10n.matchCardYourItem,
                     isLost: match.myItemIsLost,
                     title: match.myItemTitle,
                     imageUrl: match.myItemImageUrl,
@@ -234,7 +264,7 @@ class MatchCard extends ConsumerWidget {
                 ),
                 Expanded(
                   child: _MatchSide(
-                    caption: 'POSSIBLE MATCH',
+                    caption: l10n.matchCardPossibleMatch,
                     isLost: match.matchedItemIsLost,
                     title: match.matchedItemTitle,
                     imageUrl: match.matchedItemImageUrl,
@@ -252,29 +282,57 @@ class MatchCard extends ConsumerWidget {
             ],
             const SizedBox(height: 4),
             Text(
-              'Tap either item to view its post.',
+              l10n.matchCardTapHint,
               style: theme.textTheme.labelSmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
-            if (isPending) ...[
+            if (match.otherConfirmedFirst) ...[
+              const SizedBox(height: 12),
+              _StatusNote(
+                icon: Icons.how_to_reg_outlined,
+                text: l10n.matchNoteOtherConfirmedFirst,
+                highlight: true,
+              ),
+            ],
+            if (needsInput) ...[
               const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () => _act(ref, context, 'dismissed'),
-                      child: const Text('Not a match'),
+                      child: Text(l10n.matchActionNotAMatch),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: FilledButton(
                       onPressed: () => _act(ref, context, 'confirmed'),
-                      child: const Text('This is it!'),
+                      child: Text(l10n.matchActionThisIsIt),
                     ),
                   ),
                 ],
               ),
+            ] else if (match.waitingForOther) ...[
+              const SizedBox(height: 12),
+              _StatusNote(
+                icon: Icons.hourglass_top_outlined,
+                text: l10n.matchNoteYouConfirmed,
+              ),
+              if (match.reopenable)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () => _revert(
+                      l10n: l10n,
+                      container: ProviderScope.containerOf(context),
+                      messenger: ScaffoldMessenger.of(context),
+                      chatWasOpen: false,
+                    ),
+                    icon: const Icon(Icons.undo, size: 18),
+                    label: Text(l10n.matchActionUndoMyConfirmation),
+                  ),
+                ),
             ] else if (match.status == 'confirmed') ...[
               const SizedBox(height: 12),
               FilledButton.icon(
@@ -290,14 +348,14 @@ class MatchCard extends ConsumerWidget {
                   ),
                 ),
                 icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                label: const Text('Message'),
+                label: Text(l10n.matchActionMessage),
               ),
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton.icon(
                   onPressed: () => _undoDecided(context, ref),
                   icon: const Icon(Icons.undo, size: 18),
-                  label: const Text('Undo confirmation'),
+                  label: Text(l10n.matchActionUndoMyConfirmation),
                 ),
               ),
             ] else ...[
@@ -305,23 +363,55 @@ class MatchCard extends ConsumerWidget {
               Row(
                 children: [
                   Text(
-                    'Dismissed',
+                    l10n.matchStatusDismissed,
                     style: theme.textTheme.labelMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                   const Spacer(),
-                  TextButton.icon(
-                    onPressed: () => _undoDecided(context, ref),
-                    icon: const Icon(Icons.undo, size: 18),
-                    label: const Text('Undo'),
-                  ),
+                  if (match.reopenable)
+                    TextButton.icon(
+                      onPressed: () => _undoDecided(context, ref),
+                      icon: const Icon(Icons.undo, size: 18),
+                      label: Text(l10n.commonUndo),
+                    ),
                 ],
               ),
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// A one-line status inside a match card ("You confirmed…", "The other
+/// person says this is a match…").
+class _StatusNote extends StatelessWidget {
+  const _StatusNote({required this.icon, required this.text, this.highlight = false});
+
+  final IconData icon;
+  final String text;
+
+  /// Tinted with the brand colour (used for "your turn" prompts).
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final background = highlight
+        ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
+        : theme.colorScheme.surfaceContainerHighest;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(10)),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
+        ],
       ),
     );
   }
