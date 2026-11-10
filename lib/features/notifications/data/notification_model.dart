@@ -34,7 +34,18 @@ class NotificationModel {
   /// reasoning behind keeping this simple.
   String get destinationRoute => switch (type) {
         'new_match' when itemId != null => '/item/$itemId/matches',
+        // The other owner confirmed — the person's own post's matches screen
+        // is where the "This is it!" button is.
+        'match_waiting' when itemId != null => '/item/$itemId/matches',
+        'saved_search' when itemId != null => '/item/$itemId',
         'item_returned' => '/profile/returned',
+        // Moderation: the owner is sent to their hidden posts (to read the
+        // reason or appeal); a restored post opens; admins go to the queue.
+        'post_hidden' || 'post_removed' || 'appeal_denied' => '/profile/hidden-posts',
+        'post_restored' when itemId != null => '/item/$itemId',
+        // "Still looking?" / "expired": the post page, where Keep it up / Renew is.
+        'item_expiring' || 'item_expired' when itemId != null => '/item/$itemId',
+        'admin_review' => '/admin/reports',
         'new_rating' => '/profile/ratings',
         // match_confirmed, claim_filed, claim_approved, claim_rejected,
         // and new_match with no itemId (shouldn't happen, but cheaper to
