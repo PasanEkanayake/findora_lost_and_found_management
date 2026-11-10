@@ -15,7 +15,10 @@ class NotificationsRepository {
     final rows = await supabase
         .from(AppConstants.notificationsTable)
         .select()
-        .order('created_at', ascending: false);
+        .order('created_at', ascending: false)
+        // Alerts older than 90 days are deleted nightly (housekeeping()), so
+        // this is just a ceiling on what one screen downloads.
+        .limit(150);
     return rows.map(NotificationModel.fromMap).toList();
   }
 
