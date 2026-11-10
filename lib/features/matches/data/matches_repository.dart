@@ -1,59 +1,51 @@
-import '../../../core/constants/app_constants.dart';
+import '../../../core/paging/page_result.dart';
 import '../../../core/supabase/supabase_client.dart';
 import 'match_model.dart';
 
 class MatchesRepository {
   const MatchesRepository();
 
-  /// Calls the `my_matches()` RPC (see
-  /// supabase/02_functions_and_triggers.sql), which already resolves each
-  /// row into "my item" vs "the matched item" server-side — no client-side
-  /// joining needed.
+  /// One page of the signed-in user's matches, from the `my_matches_page()`
+  /// RPC (supabase/29_matches_paging.sql). The server filters, orders and
+  /// limits; it also returns the caller's own post's first photo, so no second
+  /// query is needed.
   ///
-  /// The RPC only returns the *matched* item's photo, so the caller's own
-  /// items' photos are fetched in one extra query — a match card shows both
-  /// sides, so it's clear which of your items matched which. That lookup is
-  /// cosmetic: if it fails the cards just show the placeholder for your side.
-  Future<List<MatchModel>> fetchMyMatches() async {
-    final rows = (await supabase.rpc('my_matches') as List<dynamic>)
-        .map((row) => row as Map<String, dynamic>)
-        .toList();
-
-    final myItemIds = {for (final row in rows) row['my_item_id'] as String}.toList();
-    final photoByItemId = <String, String>{};
-    if (myItemIds.isNotEmpty) {
-      try {
-        final itemRows = await supabase
-            .from(AppConstants.itemsTable)
-            .select('id, item_images(image_url)')
-            .inFilter('id', myItemIds);
-        for (final itemRow in itemRows) {
-          final images = (itemRow['item_images'] as List<dynamic>?) ?? const [];
-          if (images.isNotEmpty) {
-            photoByItemId[itemRow['id'] as String] =
-                (images.first as Map<String, dynamic>)['image_url'] as String;
-          }
-        }
-      } catch (_) {
-        // See above — a missing thumbnail must not hide the matches.
-      }
-    }
-
-    return [
-      for (final row in rows)
-        MatchModel.fromMap(row, myItemImageUrl: photoByItemId[row['my_item_id'] as String]),
+  /// [section]: 'pending' (best score first) | 'decided' | 'confirmed' |
+  /// 'all' (newest first). [itemId] narrows to matches involving one post.
+  /// Returns the newest/best [limit] rows plus whether there are more.
+  Future<PageResult<MatchModel>> fetchMatchesPage({
+    String section = 'all',
+    MatchFilter filter = MatchFilter.all,
+    String? itemId,
+    int limit = kListPageSize,
+  }) async {
+    final rows = await supabase.rpc('my_matches_page', params: {
+      'p_section': section,
+      'p_filter': filter.rpcValue,
+      'p_item_id': itemId,
+      // One more than needed, only to learn whether a next page exists.
+      'p_limit': limit + 1,
+    }) as List<dynamic>;
+    final matches = [
+      for (final row in rows) MatchModel.fromMap(row as Map<String, dynamic>),
     ];
+    return PageResult.fromFetched(matches, limit);
   }
 
-  /// Confirms, dismisses or (Undo) re-opens a match. Goes through the
-  /// `decide_match()` function (supabase/17_harden_policies.sql) — clients
-  /// have no direct write access to `matches` any more — which checks that
-  /// the caller owns one side and refuses to un-confirm a match once a claim
-  /// exists.
-  Future<void> updateStatus(String matchId, String status) async {
-    await supabase.rpc('decide_match', params: {
+  /// Records MY decision on a match: 'confirmed', 'dismissed' or 'pending'
+  /// (Undo — clears my decision). Goes through the `decide_match()` function
+  /// (supabase/31_two_sided_confirmation.sql) — clients have no direct write
+  /// access to `matches` — which checks that the caller owns one side and
+  /// refuses to take back a confirmation once a claim exists.
+  ///
+  /// A match is only 'confirmed' once BOTH people have confirmed, so the
+  /// returned value is the match's status afterwards: 'confirmed' (mutual —
+  /// the chat is open), 'pending' (still waiting on someone) or 'dismissed'.
+  Future<String> decide(String matchId, String decision) async {
+    final result = await supabase.rpc('decide_match', params: {
       'p_match_id': matchId,
-      'p_status': status,
+      'p_status': decision,
     });
+    return result as String? ?? decision;
   }
 }
