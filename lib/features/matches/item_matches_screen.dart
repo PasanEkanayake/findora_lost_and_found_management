@@ -2,20 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/auth_providers.dart';
+import '../../core/paging/page_result.dart';
+import '../../core/widgets/show_more_button.dart';
 import '../items/data/items_providers.dart';
+import 'data/match_model.dart';
 import 'data/matches_providers.dart';
 import 'widgets/match_card.dart';
 
 /// Every match involving one specific post — reached from that post's
-/// detail screen ("View possible matches"). A thin filter over
-/// [matchesProvider] (every match for the signed-in user) rather than its
-/// own query, so a decision made here (Confirm / Not a match / Message)
+/// detail screen ("View possible matches"). Reads
+/// [matchesProvider] with this post's id (paged, with a "Show more" button)
+/// so a decision made here (Confirm / Not a match / Message)
 /// shows up immediately in the main Matches tab too, and vice versa.
 ///
 /// [itemId] can be either side of a match: the signed-in user's own post,
 /// or someone else's post that already matched against one of the user's
 /// own — both cases just filter to whichever rows mention this id.
-class ItemMatchesScreen extends ConsumerWidget {
+class ItemMatchesScreen extends ConsumerStatefulWidget {
   const ItemMatchesScreen({super.key, required this.itemId, this.itemTitle});
 
   final String itemId;
@@ -27,8 +30,23 @@ class ItemMatchesScreen extends ConsumerWidget {
   final String? itemTitle;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final matchesAsync = ref.watch(matchesProvider);
+  ConsumerState<ItemMatchesScreen> createState() => _ItemMatchesScreenState();
+}
+
+class _ItemMatchesScreenState extends ConsumerState<ItemMatchesScreen> {
+  /// How many matches to show; grows with "Show more".
+  int _limit = kListPageSize;
+
+  /// Last data shown, so the list stays visible while a bigger page loads.
+  PageResult<MatchModel>? _last;
+
+  @override
+  Widget build(BuildContext context) {
+    final matchesAsync = ref.watch(
+      matchesProvider(MatchesQuery(itemId: widget.itemId, limit: _limit)),
+    );
+    final page = matchesAsync.value ?? _last;
+    _last = page;
 
     return Scaffold(
       appBar: AppBar(
@@ -37,9 +55,9 @@ class ItemMatchesScreen extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text('Possible matches'),
-            if (itemTitle != null)
+            if (widget.itemTitle != null)
               Text(
-                itemTitle!,
+                widget.itemTitle!,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).appBarTheme.foregroundColor?.withValues(alpha: 0.7),
                     ),
@@ -47,38 +65,42 @@ class ItemMatchesScreen extends ConsumerWidget {
           ],
         ),
       ),
-      body: matchesAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (_, __) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Text(
-              "Couldn't load matches. Pull down on the Matches tab to try again.",
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ),
-        ),
-        data: (matches) {
-          final relevant = matches
-              .where((m) => m.myItemId == itemId || m.matchedItemId == itemId)
-              .toList();
-
-          if (relevant.isEmpty) {
-            return _EmptyState(itemId: itemId);
+      body: Builder(builder: (context) {
+        if (page == null) {
+          if (matchesAsync.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  "Couldn't load matches. Pull down on the Matches tab to try again.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            );
           }
+          return const Center(child: CircularProgressIndicator());
+        }
 
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-            children: [
-              for (final match in relevant) ...[
-                MatchCard(key: ValueKey(match.matchId), match: match),
-                const SizedBox(height: 12),
-              ],
+        if (page.items.isEmpty) {
+          return _EmptyState(itemId: widget.itemId);
+        }
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            for (final match in page.items) ...[
+              MatchCard(key: ValueKey(match.matchId), match: match),
+              const SizedBox(height: 12),
             ],
-          );
-        },
-      ),
+            if (page.hasMore)
+              ShowMoreButton(
+                loading: matchesAsync.isLoading,
+                onPressed: () => setState(() => _limit += kListPageSize),
+              ),
+          ],
+        );
+      }),
     );
   }
 }
