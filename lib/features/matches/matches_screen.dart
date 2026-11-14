@@ -3,27 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../chat/data/safety_providers.dart';
 import '../items/data/items_providers.dart';
+import '../../l10n/app_localizations.dart';
 import '../../core/ml/tflite_classifier.dart';
 import '../../core/ml/tflite_provider.dart';
+import '../../core/paging/page_result.dart';
 import '../../core/widgets/shimmer_list.dart';
+import '../../core/widgets/show_more_button.dart';
 import 'data/match_model.dart';
 import 'data/matches_providers.dart';
 import 'widgets/match_card.dart';
 import 'widgets/match_legend.dart';
 
-/// Narrows the match list by which signal(s) actually contributed to it.
-///
-/// [imageOnly]/[textOnly]/[both] didn't always make sense as separate
-/// options: before `supabase/12_text_matching.sql`, every match had to
-/// pass the image threshold just to exist as a candidate at all (see
-/// `matching_threshold()`), so "only image" and "both" would have been
-/// identical and "only text" would always have been empty. Text matching
-/// now finds pairs with no photo involved at all, so a match's
-/// `imageSimilarity`/`textSimilarity` can each independently be present or
-/// null — these three options are how to tell those cases apart.
-enum _MatchFilter { all, imageOnly, textOnly, both, nearby, time }
-
-/// Surfaces candidate matches from `my_matches()` — populated automatically
+/// Surfaces candidate matches from `my_matches_page()` — populated automatically
 /// by the `record_matches_for_image` trigger whenever a photo with an
 /// embedding is uploaded (see Phase 5 in the README, and
 /// supabase/10_open_matching_and_time.sql for the current scoring). Tapping
@@ -36,31 +27,41 @@ class MatchesScreen extends ConsumerStatefulWidget {
 }
 
 class _MatchesScreenState extends ConsumerState<MatchesScreen> {
-  _MatchFilter _filter = _MatchFilter.all;
+  /// Which signal(s) a match must have — sent to the server, which filters
+  /// before paging (see supabase/29_matches_paging.sql).
+  MatchFilter _filter = MatchFilter.all;
 
-  bool _passesFilter(MatchModel match) {
-    // "Agrees", not "exists": every pair with photos on both sides now has a
-    // photo score, low or not (see supabase/18_calibrated_match_score.sql).
-    final hasImage = match.photosAgree;
-    final hasText = match.wordingAgrees;
-    switch (_filter) {
-      case _MatchFilter.all:
-        return true;
-      case _MatchFilter.imageOnly:
-        return hasImage && !hasText;
-      case _MatchFilter.textOnly:
-        return hasText && !hasImage;
-      case _MatchFilter.both:
-        return hasImage && hasText;
-      case _MatchFilter.nearby:
-        // 5km, matching the map view's default search radius elsewhere
-        // in the app — "nearby" means the same thing in both places.
-        return match.distanceMeters != null && match.distanceMeters! <= 5000;
-      case _MatchFilter.time:
-        // 0.5 on time_proximity_score's 72-hour decay works out to
-        // roughly two days apart or closer — see that function's doc.
-        return match.timeProximity != null && match.timeProximity! >= 0.5;
+  // The two sections are paged separately. Each grows by [kListPageSize] per
+  // "Show more"; a refresh re-reads the same number of rows, so the lists
+  // never collapse back to the first page on their own.
+  int _pendingLimit = kListPageSize;
+  int _waitingLimit = kListPageSize;
+  int _decidedLimit = kListPageSize;
+
+  /// Last data shown for each section, so the list stays on screen (with a
+  /// spinner on its button) while a bigger page loads.
+  PageResult<MatchModel>? _lastPending;
+  PageResult<MatchModel>? _lastWaiting;
+  PageResult<MatchModel>? _lastDecided;
+
+  /// Back to the first page of everything. Call inside setState.
+  void _resetPaging({bool forgetShown = false}) {
+    _pendingLimit = kListPageSize;
+    _waitingLimit = kListPageSize;
+    _decidedLimit = kListPageSize;
+    if (forgetShown) {
+      _lastPending = null;
+      _lastWaiting = null;
+      _lastDecided = null;
     }
+  }
+
+  void _setFilter(MatchFilter filter) {
+    if (filter == _filter) return;
+    setState(() {
+      _filter = filter;
+      _resetPaging(forgetShown: true);
+    });
   }
 
   bool _isScanning = false;
@@ -168,11 +169,26 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final matchesAsync = ref.watch(matchesProvider);
+    final pendingAsync = ref.watch(matchesProvider(
+      MatchesQuery(section: 'pending', filter: _filter, limit: _pendingLimit),
+    ));
+    final waitingAsync = ref.watch(matchesProvider(
+      MatchesQuery(section: 'waiting', filter: _filter, limit: _waitingLimit),
+    ));
+    final decidedAsync = ref.watch(matchesProvider(
+      MatchesQuery(section: 'decided', filter: _filter, limit: _decidedLimit),
+    ));
+    // While a bigger page loads, keep showing what was there.
+    final pendingPage = pendingAsync.value ?? _lastPending;
+    final waitingPage = waitingAsync.value ?? _lastWaiting;
+    final decidedPage = decidedAsync.value ?? _lastDecided;
+    _lastPending = pendingPage;
+    _lastWaiting = waitingPage;
+    _lastDecided = decidedPage;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Matches for you'),
+        title: Text(AppLocalizations.of(context).matchesTitle),
         actions: [
           IconButton(
             icon: const Icon(Icons.info_outline),
@@ -193,129 +209,166 @@ class _MatchesScreenState extends ConsumerState<MatchesScreen> {
             : null,
       ),
       body: RefreshIndicator(
-        onRefresh: () => ref.refresh(matchesProvider.future),
-        child: matchesAsync.when(
-          loading: () => const ShimmerCardList(),
-          error: (error, _) => _EmptyState(
-            icon: Icons.error_outline,
-            title: "Couldn't load matches",
-            body: 'Check your connection and pull down to try again.',
-          ),
-          data: (allMatches) {
-            if (allMatches.isEmpty) {
+        onRefresh: () async {
+          setState(_resetPaging);
+          ref.invalidate(matchesProvider);
+          try {
+            await ref.read(
+              matchesProvider(MatchesQuery(section: 'pending', filter: _filter)).future,
+            );
+          } catch (_) {
+            // The error state on screen says it; the spinner just stops.
+          }
+        },
+        child: Builder(builder: (context) {
+          if (pendingPage == null || waitingPage == null || decidedPage == null) {
+            if (pendingAsync.hasError || waitingAsync.hasError || decidedAsync.hasError) {
               return _EmptyState(
-                icon: Icons.auto_awesome_outlined,
-                title: 'No matches yet',
-                body: 'Once you report a lost or found item, our on-device AI '
-                    "compares its photo against everyone else's to look for a "
-                    "possible match — they'll show up here automatically. "
-                    'Posted before? Tap the scan icon (top right) to re-check '
-                    'your photos.',
+                icon: Icons.error_outline,
+                title: AppLocalizations.of(context).matchesLoadErrorTitle,
+                body: AppLocalizations.of(context).matchesLoadErrorBody,
               );
             }
+            return const ShimmerCardList();
+          }
 
-            // Matches with someone I've blocked are hidden too.
-            final blocked = ref.watch(blockedUserIdsProvider).value ?? const <String>{};
-            final matches = allMatches
-                .where((m) => !blocked.contains(m.matchedItemUserId))
-                .where(_passesFilter)
-                .toList();
-            // Best evidence first; ties keep the server's newest-first order
-            // (List.sort isn't stable, so break ties explicitly).
-            final pending = matches.where((m) => m.status == 'pending').toList()
-              ..sort((a, b) {
-                final byScore = b.similarityScore.compareTo(a.similarityScore);
-                return byScore != 0 ? byScore : b.createdAt.compareTo(a.createdAt);
-              });
-            final decided = matches.where((m) => m.status != 'pending').toList();
+          // Matches with someone I've blocked are hidden too (the server
+          // already leaves them out; this makes a just-made block instant).
+          final blocked = ref.watch(blockedUserIdsProvider).value ?? const <String>{};
+          final pending = pendingPage.items
+              .where((m) => !blocked.contains(m.matchedItemUserId))
+              .toList();
+          final waiting = waitingPage.items
+              .where((m) => !blocked.contains(m.matchedItemUserId))
+              .toList();
+          final decided = decidedPage.items
+              .where((m) => !blocked.contains(m.matchedItemUserId))
+              .toList();
 
-            return Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                  child: SizedBox(
-                    height: 36,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      children: [
-                        _FilterChip(
-                          label: 'All',
-                          selected: _filter == _MatchFilter.all,
-                          onTap: () => setState(() => _filter = _MatchFilter.all),
-                        ),
-                        const SizedBox(width: 8),
-                        _FilterChip(
-                          label: '📷 Image only',
-                          selected: _filter == _MatchFilter.imageOnly,
-                          onTap: () => setState(() => _filter = _MatchFilter.imageOnly),
-                        ),
-                        const SizedBox(width: 8),
-                        _FilterChip(
-                          label: '📝 Text only',
-                          selected: _filter == _MatchFilter.textOnly,
-                          onTap: () => setState(() => _filter = _MatchFilter.textOnly),
-                        ),
-                        const SizedBox(width: 8),
-                        _FilterChip(
-                          label: '📷📝 Both',
-                          selected: _filter == _MatchFilter.both,
-                          onTap: () => setState(() => _filter = _MatchFilter.both),
-                        ),
-                        const SizedBox(width: 8),
-                        _FilterChip(
-                          label: '📍 Nearby',
-                          selected: _filter == _MatchFilter.nearby,
-                          onTap: () => setState(() => _filter = _MatchFilter.nearby),
-                        ),
-                        const SizedBox(width: 8),
-                        _FilterChip(
-                          label: '🕐 Similar time',
-                          selected: _filter == _MatchFilter.time,
-                          onTap: () => setState(() => _filter = _MatchFilter.time),
-                        ),
-                      ],
-                    ),
+          if (pending.isEmpty && waiting.isEmpty && decided.isEmpty && _filter == MatchFilter.all) {
+            return _EmptyState(
+              icon: Icons.auto_awesome_outlined,
+              title: AppLocalizations.of(context).matchesEmptyTitle,
+              body: AppLocalizations.of(context).matchesEmptyBody,
+            );
+          }
+
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: SizedBox(
+                  height: 36,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      _FilterChip(
+                        label: AppLocalizations.of(context).matchFilterAll,
+                        selected: _filter == MatchFilter.all,
+                        onTap: () => _setFilter(MatchFilter.all),
+                      ),
+                      const SizedBox(width: 8),
+                      _FilterChip(
+                        label: AppLocalizations.of(context).matchFilterImageOnly,
+                        selected: _filter == MatchFilter.imageOnly,
+                        onTap: () => _setFilter(MatchFilter.imageOnly),
+                      ),
+                      const SizedBox(width: 8),
+                      _FilterChip(
+                        label: AppLocalizations.of(context).matchFilterTextOnly,
+                        selected: _filter == MatchFilter.textOnly,
+                        onTap: () => _setFilter(MatchFilter.textOnly),
+                      ),
+                      const SizedBox(width: 8),
+                      _FilterChip(
+                        label: AppLocalizations.of(context).matchFilterBoth,
+                        selected: _filter == MatchFilter.both,
+                        onTap: () => _setFilter(MatchFilter.both),
+                      ),
+                      const SizedBox(width: 8),
+                      _FilterChip(
+                        label: AppLocalizations.of(context).matchFilterNearby,
+                        selected: _filter == MatchFilter.nearby,
+                        onTap: () => _setFilter(MatchFilter.nearby),
+                      ),
+                      const SizedBox(width: 8),
+                      _FilterChip(
+                        label: AppLocalizations.of(context).matchFilterSimilarTime,
+                        selected: _filter == MatchFilter.time,
+                        onTap: () => _setFilter(MatchFilter.time),
+                      ),
+                    ],
                   ),
                 ),
-                Expanded(
-                  child: matches.isEmpty
-                      ? _EmptyState(
-                          icon: Icons.filter_alt_off_outlined,
-                          title: 'No matches with this filter',
-                          body: 'Try a different filter, or "All" to see every match again.',
-                        )
-                      : ListView(
-                          // Bottom room so the last card's buttons can scroll clear of the
-                          // floating "Report item" button.
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-                          children: [
-                            const MatchLegendCard(),
-                            if (pending.isNotEmpty) ...[
-                              Text('Needs your input',
-                                  style: Theme.of(context).textTheme.titleSmall),
-                              const SizedBox(height: 8),
-                              for (final match in pending) ...[
-                                MatchCard(key: ValueKey(match.matchId), match: match),
-                                const SizedBox(height: 12),
-                              ],
-                            ],
-                            if (decided.isNotEmpty) ...[
+              ),
+              Expanded(
+                child: pending.isEmpty && waiting.isEmpty && decided.isEmpty
+                    ? _EmptyState(
+                        icon: Icons.filter_alt_off_outlined,
+                        title: AppLocalizations.of(context).matchesFilteredEmptyTitle,
+                        body: AppLocalizations.of(context).matchesFilteredEmptyBody,
+                      )
+                    : ListView(
+                        // Always scrollable so pull-to-refresh works on a short list.
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        // Bottom room so the last card's buttons can scroll clear of the
+                        // floating "Report item" button.
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                        children: [
+                          const MatchLegendCard(),
+                          if (pending.isNotEmpty) ...[
+                            Text(AppLocalizations.of(context).matchesSectionNeedsInput,
+                                style: Theme.of(context).textTheme.titleSmall),
+                            const SizedBox(height: 8),
+                            for (final match in pending) ...[
+                              MatchCard(key: ValueKey(match.matchId), match: match),
                               const SizedBox(height: 12),
-                              Text('Already decided',
-                                  style: Theme.of(context).textTheme.titleSmall),
-                              const SizedBox(height: 8),
-                              for (final match in decided) ...[
-                                MatchCard(key: ValueKey(match.matchId), match: match),
-                                const SizedBox(height: 12),
-                              ],
                             ],
+                            if (pendingPage.hasMore)
+                              ShowMoreButton(
+                                loading: pendingAsync.isLoading,
+                                onPressed: () =>
+                                    setState(() => _pendingLimit += kListPageSize),
+                              ),
                           ],
-                        ),
-                ),
-              ],
-            );
-          },
-        ),
+                          if (waiting.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Text(AppLocalizations.of(context).matchesSectionWaiting,
+                                style: Theme.of(context).textTheme.titleSmall),
+                            const SizedBox(height: 8),
+                            for (final match in waiting) ...[
+                              MatchCard(key: ValueKey(match.matchId), match: match),
+                              const SizedBox(height: 12),
+                            ],
+                            if (waitingPage.hasMore)
+                              ShowMoreButton(
+                                loading: waitingAsync.isLoading,
+                                onPressed: () =>
+                                    setState(() => _waitingLimit += kListPageSize),
+                              ),
+                          ],
+                          if (decided.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Text(AppLocalizations.of(context).matchesSectionDecided,
+                                style: Theme.of(context).textTheme.titleSmall),
+                            const SizedBox(height: 8),
+                            for (final match in decided) ...[
+                              MatchCard(key: ValueKey(match.matchId), match: match),
+                              const SizedBox(height: 12),
+                            ],
+                            if (decidedPage.hasMore)
+                              ShowMoreButton(
+                                loading: decidedAsync.isLoading,
+                                onPressed: () =>
+                                    setState(() => _decidedLimit += kListPageSize),
+                              ),
+                          ],
+                        ],
+                      ),
+              ),
+            ],
+          );
+        }),
       ),
     );
   }
