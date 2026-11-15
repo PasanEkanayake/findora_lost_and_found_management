@@ -8,6 +8,7 @@ class ReportModel {
     required this.reason,
     required this.status,
     required this.createdAt,
+    this.itemModerationState,
   });
 
   final String id;
@@ -16,6 +17,12 @@ class ReportModel {
   final String reason;
   final String status; // 'open' | 'reviewed' | 'dismissed'
   final DateTime createdAt;
+
+  /// Null for a visible post; 'auto_hidden' (hidden by reports) or 'removed'
+  /// (an admin took it down) otherwise. See supabase/32_moderation.sql.
+  final String? itemModerationState;
+
+  bool get itemIsHidden => itemModerationState != null;
 
   factory ReportModel.fromMap(Map<String, dynamic> map) {
     final itemMap = map['items'] as Map<String, dynamic>?;
@@ -26,6 +33,7 @@ class ReportModel {
       reason: map['reason'] as String,
       status: map['status'] as String,
       createdAt: DateTime.parse(map['created_at'] as String),
+      itemModerationState: itemMap?['moderation_state'] as String?,
     );
   }
 }
