@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/images/strip_metadata.dart';
 import '../../core/providers/auth_providers.dart';
 import 'data/profile_providers.dart';
 
@@ -58,7 +59,14 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     );
     if (picked == null) return;
 
-    final file = File(picked.path);
+    // Strip GPS/date/device metadata first: avatars are in a public bucket.
+    final File file;
+    try {
+      file = await stripPhotoMetadata(File(picked.path));
+    } catch (_) {
+      _showMessage("Couldn't use that photo. Try another one.", isError: true);
+      return;
+    }
     setState(() {
       _pendingAvatar = file;
       _isUploadingAvatar = true;
