@@ -4,6 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/location/countries.dart';
+import '../../../core/paging/page_result.dart';
+import 'appeal_model.dart';
+import 'moderated_item_model.dart';
+import 'moderation_log_entry.dart';
+import 'moderation_repository.dart';
 import '../../../core/supabase/supabase_client.dart';
 
 import 'admin_repository.dart';
@@ -47,12 +52,39 @@ final adminRepositoryProvider = Provider<AdminRepository>((ref) {
   return const AdminRepository();
 });
 
-final openUserReportsProvider = FutureProvider.autoDispose<List<UserReportModel>>((ref) {
-  return ref.watch(adminRepositoryProvider).fetchOpenUserReports();
+/// Open reports about people / about posts, newest first. The family
+/// parameter is how many to show (grows with "Show more"); invalidating the
+/// bare provider refreshes whatever is on screen.
+final openUserReportsProvider =
+    FutureProvider.autoDispose.family<PageResult<UserReportModel>, int>((ref, limit) {
+  return ref.watch(adminRepositoryProvider).fetchOpenUserReports(limit: limit);
 });
 
-final openReportsProvider = FutureProvider.autoDispose<List<ReportModel>>((ref) {
-  return ref.watch(adminRepositoryProvider).fetchOpenReports();
+final openReportsProvider =
+    FutureProvider.autoDispose.family<PageResult<ReportModel>, int>((ref, limit) {
+  return ref.watch(adminRepositoryProvider).fetchOpenReports(limit: limit);
+});
+
+/// Open appeals and the audit log, newest/oldest as the repository says. Same
+/// "limit grows with Show more" shape as the report queues above.
+final openAppealsProvider =
+    FutureProvider.autoDispose.family<PageResult<AppealModel>, int>((ref, limit) {
+  return ref.watch(adminRepositoryProvider).fetchOpenAppeals(limit: limit);
+});
+
+final moderationLogProvider =
+    FutureProvider.autoDispose.family<PageResult<ModerationLogEntry>, int>((ref, limit) {
+  return ref.watch(adminRepositoryProvider).fetchModerationLog(limit: limit);
+});
+
+final moderationRepositoryProvider = Provider<ModerationRepository>((ref) {
+  return const ModerationRepository();
+});
+
+/// The signed-in user's own posts that moderation hid or removed (empty for
+/// nearly everyone). Invalidate after sending an appeal.
+final myModeratedItemsProvider = FutureProvider.autoDispose<List<ModeratedItemModel>>((ref) {
+  return ref.watch(moderationRepositoryProvider).fetchMyModeratedItems();
 });
 
 /// How established someone is on Findora — shown to a finder deciding on a
