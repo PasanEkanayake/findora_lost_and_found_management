@@ -3,11 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/l10n/locale_controller.dart';
+import '../../core/location/countries.dart';
+import '../../core/notifications/push_notifications.dart';
 import '../../core/providers/auth_providers.dart';
 import '../../core/supabase/supabase_client.dart';
 import '../../core/theme/theme_mode_controller.dart';
 import '../../core/widgets/confirm_dialog.dart';
 import '../items/data/items_providers.dart';
+import '../../l10n/app_localizations.dart';
 import 'data/profile_providers.dart';
 
 /// Account screen. The header reflects the real signed-in user and their
@@ -22,10 +26,11 @@ class ProfileScreen extends ConsumerWidget {
       context,
       icon: Icons.warning_amber_rounded,
       title: 'Delete your account?',
-      message: 'This signs you out for good and removes your name, photo, and phone number. '
-          'Every item you posted is taken down too. This is not something you can undo '
-          'yourself afterward — if you change your mind later, you would need to contact '
-          'support.',
+      message: 'This signs you out for good and removes your name, photo, phone number, '
+          'and email address from your account. Every item you posted is taken down too, '
+          'and your matches and chats will show you as "Findora user". This cannot be '
+          'undone. You can create a new account with the same email after 14 days — '
+          'it will start fresh, without your old items, ratings, or chats.',
       confirmLabel: 'Delete account',
       isDestructive: true,
     );
@@ -37,7 +42,15 @@ class ProfileScreen extends ConsumerWidget {
       // No manual navigation needed — the router's redirect callback
       // sends signed-out users to /login automatically, same as the
       // plain "Sign out" button below.
-      await supabase.auth.signOut();
+      //
+      // The server has already deleted this session along with the rest of
+      // the account, so the server half of signOut() may complain. The local
+      // session is cleared first either way, and the account IS deleted by
+      // now — so that complaint must not turn into "Couldn't delete your
+      // account".
+      try {
+        await supabase.auth.signOut();
+      } catch (_) {}
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -169,12 +182,45 @@ class ProfileScreen extends ConsumerWidget {
             onTap: () => context.push('/profile/ratings'),
           ),
           ListTile(
+            leading: const Icon(Icons.public),
+            title: const Text('Country'),
+            subtitle: Text(
+              countryLabel(ref.watch(myCountryProvider)).isEmpty
+                  ? 'Choose the country whose posts you see'
+                  : '${countryLabel(ref.watch(myCountryProvider))} — change it or browse another country',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/country'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.bookmark_border),
+            title: const Text('Saved searches'),
+            subtitle: const Text('Get alerts about new matching posts'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/saved-searches'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.block),
+            title: const Text('Blocked people'),
+            subtitle: const Text("People who can't message you"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/blocked'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Download my data'),
+            subtitle: const Text('A copy of everything Findora holds about you'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/profile/export'),
+          ),
+          ListTile(
             leading: const Icon(Icons.notifications_outlined),
             title: const Text('Notification settings'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/profile/notifications'),
           ),
           const _AppearanceTile(),
+          const LanguageTile(),
           const Divider(height: 32),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -211,6 +257,24 @@ class ProfileScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/profile/help'),
           ),
+          // Only for the few people with a post moderation has hidden.
+          ref.watch(myModeratedItemsProvider).maybeWhen(
+                data: (hidden) => hidden.isEmpty
+                    ? const SizedBox.shrink()
+                    : ListTile(
+                        leading: Icon(Icons.visibility_off_outlined,
+                            color: theme.colorScheme.error),
+                        title: const Text('Hidden posts'),
+                        subtitle: Text(
+                          hidden.length == 1
+                              ? '1 post was hidden by moderation'
+                              : '${hidden.length} posts were hidden by moderation',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => context.push('/profile/hidden-posts'),
+                      ),
+                orElse: () => const SizedBox.shrink(),
+              ),
           profileAsync.maybeWhen(
             data: (profile) => profile.isAdmin
                 ? ListTile(
@@ -237,6 +301,10 @@ class ProfileScreen extends ConsumerWidget {
                 isDestructive: true,
               );
               if (!confirmed) return;
+              // Stop this phone receiving this person's notifications once
+              // they've signed out. Needs the session, so it comes first;
+              // it never throws.
+              await clearPushToken();
               // No manual navigation needed — the router's redirect
               // callback sends signed-out users to /login automatically.
               await supabase.auth.signOut();
@@ -257,6 +325,64 @@ class ProfileScreen extends ConsumerWidget {
 /// small dialog rather than cycling through a single toggle icon, so all
 /// three states (including "match device") stay a single tap away and
 /// visible at once rather than needing to be cycled through blind.
+/// Profile -> Language: English, සිංහල or தமிழ், or follow the phone. Each
+/// language is shown in itself so it can be found from any other (see
+/// kLanguageSelfNames); the choice is remembered (LocaleController).
+class LanguageTile extends ConsumerWidget {
+  const LanguageTile({super.key});
+
+  Future<void> _pick(BuildContext context, WidgetRef ref, Locale? current) async {
+    final l10n = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    // Dialog values can't be null (null means "dismissed"), so "follow the
+    // phone" is an empty string.
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: Text(l10n.languageTitle),
+        children: [
+          for (final option in <String>['', ...kLanguageSelfNames.keys])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, option),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      option.isEmpty ? l10n.languageSystemDefault : kLanguageSelfNames[option]!,
+                      style: (current?.languageCode ?? '') == option
+                          ? TextStyle(
+                              color: theme.colorScheme.primary, fontWeight: FontWeight.w600)
+                          : null,
+                    ),
+                  ),
+                  if ((current?.languageCode ?? '') == option)
+                    Icon(Icons.check, size: 18, color: theme.colorScheme.primary),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected == null) return;
+    await ref.read(localeProvider.notifier).setLocale(localeFromCode(selected.isEmpty ? null : selected));
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final current = ref.watch(localeProvider);
+    return ListTile(
+      leading: const Icon(Icons.language_outlined),
+      title: Text(l10n.languageTitle),
+      subtitle: Text(
+        current == null ? l10n.languageSystemDefault : kLanguageSelfNames[current.languageCode]!,
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _pick(context, ref, current),
+    );
+  }
+}
+
 class _AppearanceTile extends ConsumerWidget {
   const _AppearanceTile();
 
