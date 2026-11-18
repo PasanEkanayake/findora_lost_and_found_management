@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 
 import '../items/data/item_model.dart';
 import '../items/data/items_providers.dart';
+import '../../l10n/app_localizations.dart';
+import '../items/widgets/item_expiry_banner.dart';
 import '../../core/widgets/confirm_dialog.dart';
 import '../../core/widgets/item_photo.dart';
 import '../../core/widgets/shimmer_list.dart';
@@ -132,6 +134,8 @@ class _MyItemCard extends ConsumerWidget {
       case 'claimed':
       case 'matched':
         return theme.colorScheme.secondary;
+      case 'expired':
+        return theme.colorScheme.error;
       default:
         return theme.colorScheme.onSurfaceVariant;
     }
@@ -205,7 +209,7 @@ class _MyItemCard extends ConsumerWidget {
                     width: 68,
                     height: 68,
                     child: ItemPhoto(
-                      url: item.imageUrls.isEmpty ? null : item.imageUrls.first,
+                      url: item.thumbnailUrl,
                     ),
                   ),
                 ),
@@ -246,6 +250,42 @@ class _MyItemCard extends ConsumerWidget {
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                       ),
+                      if (item.isExpired || item.isExpiringWithin(kExpiryWarningDays)) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(
+                              item.isExpired
+                                  ? Icons.timer_off_outlined
+                                  : Icons.hourglass_bottom_outlined,
+                              size: 16,
+                              color: theme.colorScheme.error,
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                item.isExpired
+                                    ? 'Expired — hidden from others'
+                                    : (item.daysUntilExpiry() ?? 0) <= 1
+                                        ? 'Expires within a day'
+                                        : 'Expires in ${item.daysUntilExpiry()} days',
+                                style: theme.textTheme.labelMedium
+                                    ?.copyWith(color: theme.colorScheme.error),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => renewPost(context, ref, item),
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                              ),
+                              child: Text(item.isExpired
+                                  ? AppLocalizations.of(context).expiryRenew
+                                  : AppLocalizations.of(context).expiryKeepItUp),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
