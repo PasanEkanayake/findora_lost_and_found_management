@@ -105,6 +105,71 @@ genuinely optional — see their own rows below).
 | Editing a post refreshes its matches | A match stores a snapshot of its image / text / distance / time scores, and nothing refreshed it when a post was edited — so moving a post left the old "9 m" on its match cards. New triggers now recompute all four signals from the posts' current data whenever location, event time, title/description or photos change (scores only: matches are never created, removed, confirmed or dismissed by it). Editing the title/description also now refreshes the post's stored text embedding (it was never updated on edit), or clears it if the AI service doesn't answer so matching falls back to the actual words | **Required:** run `supabase/15_refresh_matches_on_edit.sql`, then once `select public.refresh_all_matches();` |
 | Photo analysis refills on a new photo | Posting: changing the first photo now refreshes the auto-filled **Title** and **Category** instead of keeping the first photo's guess. Anything you typed or picked yourself is never overwritten; removing the first photo re-analyses the next one (or clears the auto-filled values if none is left) | None |
 
+| Deleted accounts release their email | Deleting an account used to keep the `auth.users` row (banned) with the email still on it, so that email could never sign up again — and was still stored. Now the row is **anonymised** (placeholder email, phone/password/metadata cleared, linked Google identity and sessions removed, still banned), so the same email can create a brand-new account with no history. A **14-day cooldown** applies after deletion (only a hash of the email is kept for it), enforced by a database trigger and checked up-front on the sign-up screen with a clear message. `block_email()` can block an address permanently after moderation. The delete-account dialog and sign-in message were reworded to match | **Required:** run `supabase/16_release_email_on_delete.sql` (it also anonymises accounts deleted before it) |
+
+| Security hardening (audit phase 0) | Row-level rules now also limit **what** may be written, not only who may write it. Closed: any user making themselves admin or editing their rating (only `full_name`/`username`/`avatar_url` are client-writable on `profiles`); phone numbers and push tokens readable by everyone (moved to owner-only `profile_private`); forged ratings (now `submit_rating()` — only the two people in a completed return, once each); self-approved claims (must be `pending`, for an open found post, by someone with a confirmed match; one live claim each; the owner can only approve/reject); messages into matches you're not in, and edits to received messages; matches rewritten by their owners (now `decide_match()`, which also refuses to un-confirm once a claim exists — the app's Undo goes through it); removed posts still served by the API and restorable by their owner; posts created/edited with a fake `status`; signed-out table access. Also: 10 MB / image-type limits on the storage buckets, length limits (title 120, description 2000, message 2000, claim answer and comment 500), one open report per person per post. Push: the token is cleared on sign-out; the webhook function now **refuses to run without `WEBHOOK_SECRET`**, compares it in constant time, and de-duplicates notifications. Photos are resized to ≤1600 px before upload | **Required:** run `supabase/17_harden_policies.sql`, redeploy `send-push-notification` (`supabase functions deploy send-push-notification`), install the updated app. Then run `supabase/tests/17_policy_checks.sql` |
+| Android hardening (manual) | `android:allowBackup="false"` (session tokens in app data were being backed up) and removal of the unneeded `READ_MEDIA_IMAGES` permission. `AndroidManifest.xml` is git-ignored and holds your real Maps key, so these two edits were **not** shipped as a file — apply them by hand (see "Android hardening" below) | Manual edit, then rebuild |
+
+| Calibrated match scores | A "100% match" used to be possible with identical one-word titles and a nearby location, because the score was an average of whichever signals existed and a pair found by text never had its photos compared. Now: the photo comparison is **always** computed when both posts have a photo (low = "photos disagree", shown as such); text agreement is weighted by **specificity** (shared brand/model/colour words count fully, agreeing only on generic words like "phone" counts 60%); disagreeing photos pull the score down smoothly; and with no photo comparison available the score is capped (70% if the wording agrees specifically, otherwise 50%). The app leads with a tier — **Strong** (≥ 80%), **Likely** (≥ 55%), **Possible** — with the percentage beside it, explains a missing/low photo score on the card, lists best-evidence first, and the *Image only / Text only / Both* filters now mean "photos/wording **agree**" rather than "a score exists". Which pairs get proposed, and notifications, are unchanged. The numbers and the word list are starting points — see the tuning notes at the end of the migration | **Required:** run `supabase/18_calibrated_match_score.sql` (re-scores all existing matches; install the matching app build for the tiers) |
+
+| Paged feed, faster queries | The Browse list used to download **every** open post at once — with each post's full-size embedding vector, raw location and *all* its photos. It now loads **20 at a time** (infinite scroll, with a spinner and a Retry row if a page fails), downloads only the columns a card shows and only each post's first photo, and uses keyset paging so posts added while you scroll don't cause repeats or gaps. The lost/found tabs are now filtered **server-side** (switching reloads), and the "N lost · N found" header totals come from a small `feed_counts()` query so they're correct for the whole list, not just what's loaded. `19_indexes.sql` adds the missing indexes (feed order, "my posts", photos per post, matches by either item, claims, ratings, unread messages, contact threads, trigram search, text-embedding HNSW). Search text is also cleaned before it goes into the filter, closing a filter-injection hole (`,` `(` `)` `"` `\\` `%` `_` `*` are replaced with spaces) | **Required for the totals + speed:** run `supabase/19_indexes.sql`; install the updated app |
+| Photo autofill is humble | The on-device model (1,000 everyday-object classes, not lost-and-found classes) now only writes the **Title** when it's at least 50% sure, and pre-fills **Category** at 30% — never with "Other". Below that the card says "Not sure what this is" and offers its top 3 guesses as tappable chips instead of putting "can opener" in your title. A tapped chip counts as your own choice. Also fixed: the Category dropdown now actually updates when a later photo changes the suggestion (it only read its value when first created) | None |
+
+| Chat safety | **New-message alerts:** a message now creates an in-app alert and a push ("Sam sent you a message — About \"Black wallet\"", never the message text) — only for the *first unread* message in a conversation, so a burst is one notification; opening the chat clears it. **Block / report:** a ⋮ menu in both kinds of chat — *Report this person* (spam, harassment, scam, inappropriate, other + optional note; only someone you share a conversation with can be reported; one open report per pair) and *Block this person* (the database refuses messages in **both** directions and stops them starting a direct thread; they aren't told; the chat and match disappear from your lists). **Profile → Blocked people** lists and un-blocks. Admins get a **People** tab in *Flagged reports*. **Safety nudges:** a dismissible "meet somewhere public, never send money or codes" banner at the top of chats (links to Safety guidelines), and a confirm step before sending something that looks like a phone number (9–13 digits, so IMEIs and short serials don't trigger it) | **Required:** run `supabase/20_chat_safety.sql`; install the updated app. Optionally run `supabase/tests/20_chat_safety_checks.sql` on staging |
+
+| Push per device | A person had ONE push token, so signing in on a second phone silently turned notifications off on the first, and a phone passed to someone else could keep getting the old owner's alerts. Every device is now its own row in `device_tokens` (a phone belongs to whoever is signed in on it; signing in as someone else moves it), the Edge Function notifies all of a person's devices and deletes only the dead ones, sign-out and the notification switch remove just *this* device, and the switch in settings now reflects this device | **Required:** run `supabase/21_device_tokens.sql`, redeploy `send-push-notification`, install the updated app |
+| Abuse limits + housekeeping + faster policies | Direct writes are limited (20 posts/day, 30 messages/minute, 15 new direct chats/day, 5 claims/day, 10 reports/day each kind) with a plain-language message the app shows as-is (admins and the database's own functions are exempt). `housekeeping()` deletes alerts older than 90 days (scheduled nightly if `pg_cron` is on, plus a weekly re-score of matches). Every older policy that called `auth.uid()` per row now uses `(select auth.uid())` — same meaning, evaluated once per query (Supabase's Performance Advisor recommendation) | **Required for the limits:** run `supabase/22_limits_and_housekeeping.sql` (it prints how many policies it rewrote and whether jobs were scheduled) |
+| Time has a direction | Something can't be *found* before it was *lost*: when both posts have a time and the found one is more than 6 hours earlier, the time signal is cut to a quarter (previously only the gap mattered, in either direction). Existing matches are re-scored | **Required for this change:** run `supabase/23_time_direction.sql` |
+| Private proof questions | Someone who *found* an item can set a question only the real owner could answer ("What's on the lock screen?") and, privately, the right answer. The claimant sees the question when filing a claim; the answer lives in an owner-only table, is shown only to the finder next to the claimant's answer, and is deleted when the post is removed. Optional — claims without one work as before | **Required:** run `supabase/24_proof_questions.sql`; install the updated app |
+| Friendlier errors, real tests, CI | Our own limit/refusal messages (rate limits, "a claim has already been filed…") are now shown to the person instead of a generic failure; anything else stays generic. The leftover template `test/widget_test.dart` (which could never pass) now holds real tests, and `.github/workflows/ci.yml` runs `flutter analyze` and `flutter test` on every push/PR | None (CI needs the repo on GitHub; a stand-in empty `.env` is created in CI) |
+
+| AI service locked down | `/embed/*` used to answer anyone on the internet. It now needs the caller's Supabase sign-in token (checked by asking Supabase, so no secret lives on the service), is rate limited per person (30/min), rejects uploads over 10 MB and over-long text, and has no CORS by default. It **refuses** requests (503) until `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` are set on the host. The app sends the token automatically. 7 unit tests (`python -m unittest test_security`) ran and pass | **Required:** set `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` on the AI service host (see `ai_service/README.md`) and redeploy it — until then the text signal is skipped |
+| Sign-in session in encrypted storage | The Supabase session (including the long-lived refresh token) was stored as readable text in app data; it now lives in the Android Keystore (`flutter_secure_storage`). People already signed in are moved across automatically; if the Keystore can't be read the person just signs in again | **Run `flutter pub get`** (new dependency), then rebuild |
+| Long chats, posting, drafts | Chats load the newest 50 messages with a *Load earlier messages* row; alerts (150) and My Items (200) are capped. Posting uploads photos 3 at a time, retries flaky uploads, keeps the original photo order, withdraws a half-created post (and deletes its uploaded files) if photos fail, and **saves an unfinished post as a draft** that is restored next time (photos must be re-added) | None |
+| Small safety/trust/accessibility additions | *Suggest a safe meeting place* in the chat ⋮ menu; the finder sees the claimant's rating and member-since date when reviewing a claim; place search (by name/address) in the location picker; photo alt-text and decoded-size limits for thumbnails; a missing tooltip fixed | None |
+| Match outcome log and data export | Every confirm/dismiss/undo records the match's scores (no personal data) in `match_outcomes`, readable only by admins, with `match_outcome_summary` showing how decisions fall across score bands — the evidence for tuning the Strong/Likely cut-offs. **Profile → Download my data** builds a JSON copy of everything held about the account (copy to clipboard) | **Required:** run `supabase/25_outcomes_and_data_export.sql` |
+
+| Country on every post | A **compulsory Country** field on the post and edit forms (a searchable list, pre-filled from your profile / phone region and then from the pinned location, which you can override). Browse now shows each person the posts from **their** country — the flag at the top-left of Browse (and **Profile → Country**) opens the country settings — and match suggestions are never made between posts in different countries. The database refuses a new post from the app without a valid two-letter country code. **Older posts have no country and stay out of every feed until you give them one** — if they're all from one country: `update public.items set country_code = 'LK' where country_code is null;` (change `LK`) | **Required:** run `supabase/26_country.sql` (then the `update` above for existing posts); install the updated app |
+| Posting guidelines | Opening *Report an item* first shows a short sheet on keeping the item private to its owner (describe it generally, show the outside only, add a proof question if you found it, keep the secret detail to yourself if you lost it, choose the country and the place, no contact details in the post). *Don't show this again* is available, and a **Posting tips** link on the form reopens it | None |
+| Match label summary | The Matches tab now explains **Strong / Likely / Possible** (what each means and its score range) in a card at the top (dismissible with *Got it*) and under the ⓘ button in the app bar; the score ranges come from the same constants the tiers use, so they can't drift apart | None |
+
+| Country at sign-up and in settings | **Create account** now asks for the country (compulsory, pre-filled from the phone's region) and saves it on the profile, so Browse is filtered from the first launch; people without one (older accounts, Google sign-in) are asked once. **Profile → Country** (also the flag at the top-left of Browse) shows the *home country* — changeable **once every 30 days** (the first choice is free) — and a *Travelling?* option to browse another country for **3, 7, 14 or 30 days**, after which the home country comes back by itself (ends early on request; can't be the home country; max 30 days). Posts are unaffected: each keeps the country of its place. The limits are enforced by the database, with the next possible date shown | **Required:** run `supabase/27_country_settings.sql`; install the updated app |
+| Two display bugs fixed | The country chip between the search bar and the filters was white text on a light background (invisible) — removed, replaced by the flag button. The posting-guidelines sheet showed only the dim background because it combined a drag handle with dragging switched off (an invalid combination) — it's now an ordinary dialog | None |
+
+| Filter & sort on Browse | A **filter button** in the Browse search bar (with a dot when something is set) opens *Filter & sort*: **Posted** — any time / last 24 hours / 7 days / 30 days — and **Sort by** — newest first (default) / oldest first / **nearest to me** (uses the phone's location, ordered by distance in the database; posts without a location come last; falls back to newest if location isn't available). The header totals follow the window. Paging works in every order | **Required for the window and nearest sort:** run `supabase/28_saved_searches.sql`; install the updated app |
+| Saved searches with alerts | From the same sheet, **Save this search** (words and/or a category, optionally Lost or Found, in your country). When a **new** matching post is made you get an alert (in the app and as a push) that opens the post. Up to 10 searches; never for your own posts or blocked people; one alert per post and at most one per search every 30 minutes; each can be switched off or deleted under **Profile → Saved searches**. Included in *Download my data*; removed when the account is deleted | **Required:** run `supabase/28_saved_searches.sql`, redeploy `send-push-notification`, install the updated app |
+| Bug fixed: later Browse pages ignored the country | While scrolling, pages after the first were fetched without the country filter, so posts from other countries could appear further down. Fixed together with the new filters | None |
+
+| Paging: Matches tab, a post's matches, admin reports | The Matches tab used to download **every** match at once (plus a second query for your own posts' photos); the two admin report queues (Posts / People) did the same. Now each list shows **20** and ends with a **Show more** button (+20 each tap), with a spinner while it loads. The Matches tab's two sections (*Needs your input*, best score first; *Already decided*, newest first) page separately, and the filter chips (Image only / Text only / Both / Nearby / Similar time) are now applied **on the server** — filtering the phone's loaded list would have hidden matches that simply weren't loaded yet. The list asks for the newest *N* rows rather than "the rows after the last one", so the 15-second refresh, a decision (Confirm / Not a match / Undo) or a dismissed report just re-reads the same *N* rows: nothing collapses back to the first page, and nothing is skipped or repeated. People you've blocked are now left out by the database too (so a page never looks short). A post's **View possible matches** screen is paged the same way, and its "Message about this item" button asks only for *confirmed* matches. The server caps one request at 500 rows | **Required:** run `supabase/29_matches_paging.sql` (adds `my_matches_page()` + two indexes); install the updated app. Without it the Matches tab and post pages show "Couldn't load matches". Optional check: `supabase/tests/29_checks.sql` |
+
+| Offline banner | A slim banner slides in at the top — "You're offline — showing what's already loaded" — whenever the phone can't reach Findora's backend, and turns green for two seconds ("Back online") when it can again. It checks by opening a plain connection to your Supabase host (`SUPABASE_URL`) every 15 s (every 5 s while offline, and whenever the app returns to the foreground), so it also catches "connected to Wi-Fi but no internet", which a Wi-Fi/mobile-data check would miss; two failed checks in a row are needed before it appears, so one dropped packet doesn't flash it. It sits above the screens (never over an app bar) and lists that failed while offline (Browse, Matches, Alerts) reload on their own when the connection returns. No new package, permission or migration. Code: `lib/core/connectivity/connectivity_provider.dart`, `lib/core/widgets/offline_banner.dart` | None |
+
+| Photos and typing indicators in chats | **Photos:** a new photo button beside the message box (both the confirmed-match chat and a direct "Contact poster" thread) — take a photo or pick one, optionally add text as a caption, and it sends with a progress bar. Photos are resized to 1600 px, tap to view full screen with pinch-zoom, and a photo-only message shows "📷 Photo" in the Chats list. They are stored in a **private** `chat-images` bucket (unlike post photos, since people may send things like a found phone's lock screen): only the two people in that conversation can read or add files in its folder, the app shows them through one-hour signed links (cached by path, so they stay cached), and a message can only point at a file in its own conversation's folder. If sending fails after the upload, the file is removed again. **Typing:** the other person's "…" bubble shows above the message box while they type (and a few seconds after they stop, or as soon as their message arrives). It uses Realtime *Broadcast* — never written to the database — on a channel named after the conversation's unguessable id, carrying only the sender's id and true/false. Both chat screens now share one composer and one bubble widget | **Required for photos:** run `supabase/30_chat_photos.sql` (adds `image_path` to both message tables, the private bucket and its rules, "📷 Photo" previews). Typing needs no SQL (Realtime must be on for the project, as it already is for chat). Optional check: `supabase/tests/30_checks.sql` |
+
+| Two-sided match confirmation | Before, **one** person tapping "This is it!" confirmed a match for both and opened the chat — so someone could open a private chat with a person who had never agreed it was their item. Now each owner records their **own** decision and a match is *confirmed* (chat opens, claims allowed) only when **both** have confirmed. Cards show where things stand: *Needs your input* (with "The other person says this is a match" if they went first), *Waiting for the other person* (you confirmed; **Undo my confirmation** available), *Already decided*. "Not a match" from either side ends the match for both, without saying who. A new alert (**Match waiting for you**) tells you the other person confirmed; the existing **Match confirmed** alert now reaches the person who confirmed first, when the second confirms. Everything that already depended on a confirmed match (chat, photos, claims, returns) is unchanged and now means "mutual". Existing confirmed matches are grandfathered as confirmed on both sides, so no live chat or claim is affected; old dismissed matches can still be undone. Taking back a confirmation is still blocked once a claim exists. The in-app guide and FAQ were updated. Admin score-band stats: *confirmed* now means mutual | **Required:** run `supabase/31_two_sided_confirmation.sql` **before** installing the new app (it changes `decide_match()` to return the match status, adds the per-owner decision columns and the new matches query). Optional check: `supabase/tests/31_checks.sql` |
+
+| Auto-hide after reports, audit log, appeals | **Auto-hide:** when a post collects open reports from **3 different people** it is hidden at once instead of waiting in the queue. Reports only count from accounts at least **2 days old** and never from the post's own owner, so a throwaway account can't hide someone's post alone (both numbers are tunable functions in the SQL: `auto_hide_report_threshold()`, `auto_hide_min_reporter_age()`). "Hidden" reuses the existing soft delete (`items.deleted_at`) so the post vanishes from Browse, the map, search, matching and alerts exactly like a deleted post, with nothing else to keep in step; a new `items.moderation_state` (`auto_hidden` / `removed`) records *why*, and only moderators can change it. Nothing is erased. **Audit log:** `moderation_log` records every moderation event — auto-hides, removals, restorations, every report dismissed or marked reviewed (posts and people), appeals sent and decided — with who (an admin, the system, or the owner), when, which post, and any note. It is **append-only** (the database refuses edits and deletes, even for admins; the one allowed change is an account's name being blanked when that account is deleted) and readable only by admins: *Flagged reports → Activity*. **Appeals:** the owner gets an alert and sees the post under *Profile → Hidden posts* (shown only when there is something to show), where they can **appeal once** per hiding (10–1000 characters). Admins see appeals oldest-first in *Flagged reports → Appeals* and **Restore** (post comes back, owner told) or **Deny** with a required reason the owner reads; denial is final. Admin removal and restoring now go through functions (`admin_remove_item`, `admin_restore_item`, `admin_decide_appeal`) so each is logged and the owner is told; the Posts tab shows a *Hidden automatically* label and a **Restore post** button. New alerts: *Your post was hidden / removed / is back*, *Appeal denied* (owner) and *Post auto-hidden / Appeal received* (admins) | **Required:** run `supabase/32_moderation.sql`, then install the updated app (older app builds still work but their admin removals aren't logged or announced). Optional check: `supabase/tests/32_checks.sql` |
+
+| Approximate public locations | Closes the biggest privacy gap. Before, every post stored — and showed everyone — the **exact** point its owner pinned (the map returned exact coordinates, the match card's "N m away" was the exact distance between two exact spots, enough with a few test posts to work out where someone's item, often their home or workplace, really was) and the label was a **street address** ("12 Orchard Rd, Singapore"). Now `items.location` holds only an **approximate point**: the exact one snapped to the centre of a ~550 m grid cell (`public_location_grid_degrees()`; a grid can't be averaged back to the real spot by asking repeatedly, and needs no secret). Everything that already read `items.location` — map, "Nearest to me", saved-search alerts, matching, the distance on a match card — became approximate automatically. The **exact point** lives in a private table (`item_exact_locations`) no client can read; only the **owner** gets it back (to edit their post) through `get_item_coordinates()`, which now also returns `is_exact`. Labels are reduced to a neighbourhood or town (the app now sends only that; the database strips a street part from anything an older app sends, keeping the original privately). A trigger does all this on every insert and edit, whatever app version wrote the row, so an old app can't leak the exact spot or overwrite it with the approximate one. In the app: others see a **shaded circle** (not a pin) on the post page and map, with "Approximate area"; the owner sees their exact pin; the post and edit screens say what others will see; the guide, FAQ and privacy text were updated; *Download my data* now includes the exact location. Existing posts are converted by the migration (their match distances refresh because their location changes) | **Required:** run `supabase/33_approximate_locations.sql` (changes data: keep a backup / run on staging first), then install the updated app. Optional check: `supabase/tests/33_checks.sql` |
+
+| Widget and integration tests of the main flows | New tests drive the **real screens** — Matches tab, admin moderation queue, owner's Hidden posts, offline banner, chat composer / bubble / typing dots — against **in-memory fakes** of the repositories (the app can't start in a test: `Supabase.instance.client` only exists after `Supabase.initialize()` with a real project). The matches fake follows the same two-sided rules as `decide_match()`, so the tests cover real journeys: *confirm → waiting → undo → other confirms → mutual → Message button*; *they confirmed first*; *Not a match → Undo* (and no Undo when the other person dismissed); *20 matches then Show more*; *filter chips sent to the server*; *admin restores an auto-hidden post, removes one, must give a reason to deny an appeal, finds it all in the activity log*; *owner appeals only with a real explanation, only once*; *offline banner appears, says Back online, and a half-typed message survives*. Each journey is written once (`test/support/flows.dart`) and runs both as a fast widget test (`flutter test`) and on a device (`flutter test integration_test -d <device>`, no backend or network needed). Not covered (need a live backend): sign-in, posting with photos and AI matching, real chat and Realtime — see A6b | Run `flutter pub get` (adds the SDK's `integration_test`), then **A6b** |
+
+| Server-side thumbnails | Lists (Browse, My posts, Matches, Chats, the map) used to download the **full** photo (up to 1600 px, often several hundred KB) for a tile a few hundred pixels wide — a page of 20 cards could be 5–10 MB of mobile data. Now each photo gets a small companion (480 px long side, JPEG, ~30–60 KB) made by a new **`make-thumbnails` Edge Function** (ImageScript; no paid image-transformation plan needed) right after upload, stored next to the original as `thumb_<name>.jpg` with its URL in `item_images.thumb_url`. Every list query returns `coalesce(thumb_url, image_url)` — the thumbnail when there is one, the full photo otherwise — so nothing breaks before a thumbnail exists (older posts, a failed run, the function not deployed). The post page's gallery, matching and AI embedding keep using the full photo. The app asks for thumbnails after a post or a photo edit, and **once per session for the person's own older photos** (30 at a time, batches of 10, silent), so the backlog clears as people open the app; an admin can clear it all at once with a `curl` loop (see the function's README). Only the function (service role) can set `thumb_url`: a trigger ignores it from the app and clears it when a photo is replaced. Removing a photo deletes its thumbnail too. Failures are invisible and retried next session. Limits: JPEG/PNG/TIFF originals (HEIC, WebP and animated GIFs keep using the full image), originals ≤ 15 MB | **Required (in this order):** run `supabase/34_thumbnails.sql`, then `supabase functions deploy make-thumbnails`, then install the app (the app's list queries select `thumb_url`, so the migration must come first). Optional: backfill and checks — `supabase/functions/make-thumbnails/README.md`, `supabase/tests/34_checks.sql` |
+
+| Post expiry and "still looking?" reminders | Posts used to stay live for ever — found, replaced or forgotten items kept appearing in Browse and the map, kept being matched, and kept sending people to chat with someone who'd stopped caring. Now a post lasts **60 days** (`post_lifetime()`). **7 days before, and again 1 day before**, the owner gets a *Still looking for "…"?* alert (tap → the post page, where a banner offers **Keep it up**, a fresh 60 days; the same button is on the My posts card). When the time is up the status becomes **`expired`**: it leaves Browse, the map and matching exactly like a resolved post (those already only look at `status = 'open'`), its matches stop showing, and nobody can start a chat about it — but it is **not deleted**: it stays in the owner's My posts marked *Expired* with a **Renew** button, which brings it back for another 60 days and re-matches its photos against everything open now. A post is **never expired while a conversation about it is under way** (a confirmed match, or a pending/approved claim). Only the database sets `expires_at` (the app can't change it); a nightly `pg_cron` job (`process_item_expiry()`, 08:23 UTC) sends the reminders and does the expiring (without pg_cron, run that function once a day). **Existing posts get a grace period**: they expire 60 days after posting but not sooner than 14 days after this migration. New alert types: `item_expiring`, `item_expired`. The guide and FAQ explain it | **Required:** run `supabase/35_post_expiry.sql` (adds the `expired` status — if your SQL editor complains about using the new value, run the first `alter type` line on its own, then the rest), enable **pg_cron** (Database → Extensions) if you want the schedule, then install the app. Optional check: `supabase/tests/35_checks.sql` |
+
+| Share-a-post links | A **share icon** on an open post's page sends the post's **title and a link** (`https://<your host>/p/<post id>`) through the phone's share sheet (falling back to copying the link). Opening the link: **with the app** installed, Android opens the post directly (an App Link: the https filter in the manifest, host from `findora.shareHost` in `android/gradle.properties`, verified via `assetlinks.json`); someone **signed out** is sent to sign in and then lands on the post, not the feed (`pendingDeepLink`); **without the app** the link opens `web/share.html` — a small preview card (type, title, area, thumbnail) with **Open in Findora** (a `findora://open/p/<id>` link / Android intent) and **Get Findora** buttons. The card is fed by a new public Edge Function, `post-preview`, which is deliberately tiny: only type, title, neighbourhood/town label and thumbnail — **never** the description, the poster, any coordinates, or matches/chats — and an expired, resolved, deleted or moderated post answers exactly like one that doesn't exist. Ids in links are validated as uuids before the app routes anywhere. The Share button is hidden until `SHARE_BASE_URL` is set, so the app works unchanged without any of this. No migration | **Optional (but the button stays hidden without it):** follow **A9. Share-a-post links** (host `web/share.html` + `web/_redirects`, `supabase functions deploy post-preview --no-verify-jwt`, set `SHARE_BASE_URL` and `findora.shareHost`, optionally `assetlinks.json`), then `flutter pub get` (adds `share_plus` 13) and rebuild |
+
+| Localization scaffolding: English, Sinhala, Tamil | The app can now be shown in **English, සිංහල (Sinhala) and தமிழ் (Tamil)**. **Profile → Language** lets a person pick one (each shown in itself, so it can be found from any other) or follow the phone's language; the choice is remembered. Built on Flutter's standard `gen-l10n`: strings live in `lib/l10n/app_en.arb` (the template, with a description for every message) and `app_si.arb` / `app_ta.arb`; `flutter pub get` generates `AppLocalizations` (not committed). Material's own text (date pickers, "Back" tooltips…) is translated by Flutter in all three; dates and numbers follow the language too (`intl` is told which one is showing, so existing `DateFormat` calls need no change). Plurals use each language's own rules (the "expires in N days" banner is the worked example). **This is scaffolding, not a finished translation:** the pipeline is complete and the following are translated — the bottom navigation and *Report item* button, the offline banner, **the whole Matches tab and match card** (sections, filter chips, buttons, notes, snackbars, the undo dialog), the post-expiry banner and *Keep it up / Renew*, *Show more* and the language picker itself. **Everything else is still English** (the post, chat, profile, admin and sign-in screens, the in-app guide, error messages from the database, and push-notification text written by the server) and falls back gracefully. The Sinhala and Tamil text is a **first draft written without a native-speaker review** — have a speaker of each check it before release (the ARB descriptions say where each string appears). Tests check that all three files have identical keys and placeholders, and that the Matches tab renders in each language | Run `flutter pub get` (adds `flutter_localizations`; generates the translations), then **A10**. No migration |
+
+| Security and privacy audit follow-up | A full audit of the app found four high-severity gaps, now fixed in code/SQL: **(H1)** photos kept their **GPS/date/device metadata** and are stored in a public bucket — the app now strips it before upload (`lib/core/images/strip_metadata.dart`, fails closed) and `scripts/scrub_photo_metadata.py` cleans photos already stored; **(H2)** the thumbnail function trusted a database URL (SSRF / write into other users' folders) — now validated and pinned to the owner's own folder; **(H3)** a photo or avatar could point at any web address (IP tracking) — now must live in Findora's own storage; **(H4)** anyone with the public key could list every file and user id in the photo buckets — now own folder only. Also: a maintenance function no longer callable by anyone, direct contact-thread inserts removed, privacy policy brought up to date. The full report (`FINDORA_SECURITY_AUDIT.md`) lists every finding with severity, evidence and fix, including items that need *you*: erasing files on delete, locking down profile reads, admin MFA, release signing/backup, dashboard auth settings | **Required:** run `supabase/36_security_hardening.sql` (and set `storage_host`), redeploy `make-thumbnails` and `post-preview`, ship the new app, then `python scripts/scrub_photo_metadata.py --apply` once. Checks: `supabase/tests/36_checks.sql` |
+
+| Sign up with Google + the deleted-email wait for Google | The **sign-up page** now has **Sign up with Google** under *Create account* (the sign-in page keeps *Continue with Google*; one shared button). An address that belonged to an account deleted in the last 14 days was already refused for Google by the database trigger (`a_enforce_email_reuse_block`, migration 16) — but nobody was told why: Google's redirect comes back with Supabase's generic *"Database error saving new user"* and the app showed nothing. Now the app **listens for failed browser sign-ins** (`authErrorNoticeProvider` + an app-wide snackbar) and shows the same explanation as the email sign-up: *"…an account with this email was recently deleted, you can sign up with it again once the waiting period (usually 14 days) has passed."* Email sign-up and Google now share the wording (`lib/core/auth/signup_block_messages.dart`). **Optional, for the exact date:** with Google the app can't know the address until after Supabase has it, so the date can only come from the server — `supabase/37_signup_hook.sql` adds a Supabase *Before User Created* hook that returns the exact sentence (*"…you can sign up with it again on Nov 5, 2026."*) which the app then shows as is; enable it in Authentication → Auth Hooks (steps in the file). Without the hook everything still works, with the generic-date wording | Optional: run `supabase/37_signup_hook.sql` and switch the hook on for the date. Test with a Gmail address you deleted through the app minutes ago |
+
+| Limit on repeated claims | A rejected claim didn't count against anyone: the same person could file again at once, as often as they liked (the only limits were *one live claim per post* and *5 claims a day across all posts*), so someone could keep guessing the finder's verification question. Now, **per person per post: at most 3 claims in total, and a 1-hour wait after each rejection** — both enforced by the database (`claim_max_attempts()`, `claim_retry_wait()`, trigger `claims_attempt_limit`, which runs before the daily limit so the specific reason is shown first). **Warnings before the limit:** the claim form says *"Attempt 2 of 3 … you'll have 1 attempt left"* and, on the last one, shows a red *"This is your last attempt — if it isn't approved you won't be able to claim this post again"*; the chat shows *"You can try up to 3 times for each post"* before the first claim and *"You have N attempts left"* (with the minutes to wait) after a rejection; the rejection **alert** now says how many attempts are left, with a stronger one for the last. **At the limit:** the alert says *"no attempts left — you can't claim it again"*, the chat banner says so and offers no button, and a further attempt is refused with the same words. Claims rejected **before** this change don't count (everyone starts fresh). A moderator can give attempts back: `select admin_reset_claim_attempts('<post id>', '<claimant id>');` (logged in the moderation log; the person is told) | **Required:** run `supabase/38_claim_attempt_limit.sql`, then install the app (an app without the migration just shows no counts; one without the new app still gets the database's refusal messages). Checks: `supabase/tests/38_checks.sql` |
+
+| Claim form fixes: a unique detail is required | A second look at *File a claim* found several bugs. **(1) Submit with an empty answer closed the form and did nothing** — no message, no claim — and the database accepted claims with **no answer at all**, so the "describe a unique detail" requirement wasn't enforced anywhere. Now the form's **Submit stays disabled** until the answer is real (**15+ characters** when the finder set no question, **2+** when there is a question, since "red" is a fine answer there), explains what's missing under the box, and the **database enforces the same rule** (`39_claim_answer_rules.sql`) for any app version. **(2)** The same answer the finder already rejected can't be re-sent (it would waste one of the 3 attempts) — blocked in the form and in the database. **(3)** Tapping outside the form no longer throws away a typed answer. **(4)** The form scrolls, so a long question + the attempt warning + the keyboard don't push Submit off a small screen. **(5)** A second tap on *File a claim* while the first is being sent can't open another form. **(6)** The chat no longer offers *File a claim* / *File a new claim* once the post can't be claimed (another claim approved, or the post expired) — it says so instead of failing with a vague error; other failures now explain themselves. The guide and FAQ state the rule | **Required:** run `supabase/39_claim_answer_rules.sql`, then install the app. Tests: `test/claim_answer_test.dart` |
+
 New/changed SQL files, run **in order** after `04_storage_setup.sql` —
 `05` and `08` are required, `06`/`07` are optional but harmless to run
 anyway:
@@ -119,9 +184,48 @@ independent of photos — required),
 `13_returned_items_and_ratings.sql` (returned posts become private to
 their two owners, plus the Returned items and Ratings & reviews sections
 — required), `14_notifications.sql` (the Alerts tab —
-required), and finally `15_refresh_matches_on_edit.sql` (editing a post
+required), `15_refresh_matches_on_edit.sql` (editing a post
 now refreshes its existing matches — required for that fix; afterwards
-run `select public.refresh_all_matches();` once).
+run `select public.refresh_all_matches();` once), and finally
+`16_release_email_on_delete.sql` (deleting an account frees its email —
+required for that behaviour; it also backfills accounts deleted earlier), and
+finally `17_harden_policies.sql` (closes the security holes found in the
+audit — **required**; read its header first, and also redeploy the
+`send-push-notification` function and install the matching app build).
+`supabase/tests/17_policy_checks.sql` can then be run to prove it worked.
+After that comes `18_calibrated_match_score.sql` (match scores now require
+evidence — required for the new scoring; it re-scores all existing matches).
+Then `19_indexes.sql` (indexes for the feed, chat and match lookups, plus the
+`feed_counts()` function behind the Browse header totals — the totals simply
+don't show until it's run).
+Finally `20_chat_safety.sql` (new-message alerts, blocking, reporting people —
+required for those features; `supabase/tests/20_chat_safety_checks.sql`
+checks it).
+Then four more, in order: `21_device_tokens.sql` (push per device —
+redeploy `send-push-notification` too), `22_limits_and_housekeeping.sql`
+(abuse limits, nightly cleanup, faster policies), `23_time_direction.sql`
+(matching: found can't precede lost) and `24_proof_questions.sql` (a finder's
+private proof question). `supabase/tests/21_24_checks.sql` checks all four.
+And finally `25_outcomes_and_data_export.sql` (a log of match decisions for
+tuning, and the "Download my data" function; `supabase/tests/25_checks.sql`).
+Then `26_country.sql` (every post has a country; the feed and match suggestions
+are per country — **read its header first: older posts have no country and won't
+show in the feed until you set one**; `supabase/tests/26_checks.sql`).
+Then `27_country_settings.sql` (country asked at sign-up, home-country limit,
+temporary "travelling" country; `supabase/tests/27_checks.sql`).
+Then `28_saved_searches.sql` (saved searches with alerts, the "nearest first"
+query and the date window for Browse; `supabase/tests/28_checks.sql`) — and
+redeploy `send-push-notification` so a saved-search alert opens the post.
+Then `29_matches_paging.sql` (paged matches and admin report queues;
+`supabase/tests/29_checks.sql`), then `30_chat_photos.sql` (photos in chats;
+`supabase/tests/30_checks.sql`), then `31_two_sided_confirmation.sql`
+(`supabase/tests/31_checks.sql`), then `32_moderation.sql`
+(`supabase/tests/32_checks.sql`), then `33_approximate_locations.sql`
+(`supabase/tests/33_checks.sql`), then `34_thumbnails.sql` (and deploy the
+`make-thumbnails` function; `supabase/tests/34_checks.sql`), then `35_post_expiry.sql`
+(`supabase/tests/35_checks.sql`), then `36_security_hardening.sql`
+(`supabase/tests/36_checks.sql`), then — optional — `37_signup_hook.sql`, then `38_claim_attempt_limit.sql`
+(`supabase/tests/38_checks.sql`), then `39_claim_answer_rules.sql`.
 
 ---
 
@@ -272,9 +376,10 @@ warnings about Chrome or Xcode if you don't plan to build for web/iOS.
 7c. Then `08_soft_delete.sql`, `09_account_deletion.sql`,
    `10_open_matching_and_time.sql`, `11_realtime_and_matching_fixes.sql`,
    `12_text_matching.sql`, `13_returned_items_and_ratings.sql`,
-   `14_notifications.sql` and `15_refresh_matches_on_edit.sql`, in that
-   order. Each is safe to re-run. `08`,
-   `10`, `11`, `12`, `13`, `14` and `15` are needed for the current app code to
+   `14_notifications.sql`, `15_refresh_matches_on_edit.sql` and
+   `16_release_email_on_delete.sql`, `17_harden_policies.sql` and
+   `18_calibrated_match_score.sql`, `19_indexes.sql`, `20_chat_safety.sql`, `21_device_tokens.sql`, `22_limits_and_housekeeping.sql`, `23_time_direction.sql`, `24_proof_questions.sql`, `25_outcomes_and_data_export.sql`, `26_country.sql`, `27_country_settings.sql`, `28_saved_searches.sql` and `29_matches_paging.sql`, in that order. Each is safe to re-run. `08`,
+   `10`, `11`, `12`, `13`, `14`, `15`, `16`, `17`, `18`, `19`, `20`, `21`, `22`, `23`, `24`, `25`, `26`, `27`, `28` and `29` are needed for the current app code to
    work properly (see the top of this file). `13` runs a one-time backfill
    automatically for posts already returned before it; see that
    migration's header.
@@ -568,6 +673,59 @@ before your first run** — it covers the SQL migration, checking the model
 loads, and testing with two accounts. If the model is ever missing or
 broken, the app doesn't crash: posting still works, but it now warns you
 that the photo couldn't be analyzed (see `core/ml/tflite_provider.dart`).
+
+## A6b. Run the automated tests
+
+```
+flutter pub get
+flutter test                              # unit + widget tests, about a minute, no device needed
+flutter test integration_test -d <id>     # the same main flows on a phone/emulator (flutter devices lists ids)
+flutter test test/matches_screen_test.dart   # one file
+```
+
+- **What they test.** Pure logic (match tiers, paging, models, labels, notification routes) and the main flows on the real screens, listed in the What's new row *Widget and integration tests of the main flows*. The flows live in `test/support/flows.dart`; the fakes that stand in for the database live beside it.
+- **Why fakes.** The app can't be started without a Supabase project (and Firebase), so the tests replace the repositories a screen reads with in-memory ones that apply the same rules as the SQL (e.g. a match is confirmed only when both people confirm). They prove the app's behaviour; they do **not** prove the SQL — run `supabase/tests/NN_checks.sql` on a staging project for that.
+- **Adding a flow.** Write a `Future<void> myFlow(WidgetTester tester, {bool resizeView = true})` in `flows.dart`, call it from a `testWidgets` in `test/` and again from `integration_test/main_flows_test.dart`.
+- **If a test fails after you change UI text,** the flows find widgets by their visible text — update the string in `flows.dart` too.
+
+## A9. Share-a-post links
+
+Full steps, with the commands: [`supabase/functions/post-preview/README.md`](supabase/functions/post-preview/README.md). In short:
+
+1. `supabase functions deploy post-preview --no-verify-jwt`
+2. Edit the three constants at the top of `web/share.html` (preview URL, Play Store URL, Android package), then host `web/share.html` **and** `web/_redirects` on a static host (Cloudflare Pages / Netlify — the same kind of place as `web/auth-callback.html`; **not** a Supabase Storage bucket).
+3. `.env`: `SHARE_BASE_URL=https://<your host>` — the Share button appears on open posts.
+4. `android/gradle.properties`: `findora.shareHost=<your host>`, rebuild. Tapping a link now opens the preview page's **Open in Findora** into the app.
+5. To make the https link open the app *directly* (no browser hop), serve `https://<your host>/.well-known/assetlinks.json` with your signing key's SHA-256 (steps in the function README) and check with `adb shell pm get-app-links com.example.findora`.
+
+Try it: share a post from one phone, open the link on another — signed in (lands on the post), signed out (sign in, then lands on the post), and without the app (preview card).
+
+## A10. Languages (English, Sinhala, Tamil)
+
+**Try it:** Profile → Language → සිංහල or தமிழ். The Matches tab, the bottom bar and the offline banner switch at once. "System default" follows the phone's language (English if the phone's language isn't one of the three).
+
+**Where things are**
+
+| What | Where |
+|---|---|
+| English text (the template) and a description of each message for translators | `lib/l10n/app_en.arb` |
+| Sinhala / Tamil text | `lib/l10n/app_si.arb`, `lib/l10n/app_ta.arb` |
+| gen-l10n settings | `l10n.yaml` |
+| The list of languages and each one's name in itself | `lib/core/l10n/locale_controller.dart` (`kSupportedLocales`, `kLanguageSelfNames`) |
+| The saved choice | `LocaleController` (`findora.locale` in shared preferences) |
+| Generated code (don't edit, not committed) | `lib/l10n/app_localizations*.dart` — made by `flutter pub get` / `flutter run`; `flutter gen-l10n` forces it |
+
+**Translating another string**
+1. Add it to `app_en.arb` with a `@key` description, and to `app_si.arb` and `app_ta.arb` (the tests fail until all three have it).
+2. In Dart: `AppLocalizations.of(context).yourKey` (import `package:findora/l10n/app_localizations.dart`). In a callback that runs after an `await`, read it **before** the await and keep the object (it stays valid after the widget is gone — see `MatchCard._act`).
+3. Placeholders: `"hello": "Hello {name}"` with `"@hello": {"placeholders": {"name": {"type": "String"}}}`. Plurals: see `expiryExpiringDays`. **A literal apostrophe is written twice** (`don''t`) — a test enforces this.
+4. Leave emoji where the English has them (the filter chips).
+
+**Adding a language** (say Hindi, `hi`): copy `app_en.arb` to `app_hi.arb`, translate, change `@@locale`, add `Locale('hi')` and its name in itself to `locale_controller.dart`, and add the language to the picker's test expectations. Flutter must support it for Material's own text (`flutter_localizations` covers most languages).
+
+**Fonts.** Sinhala and Tamil are drawn with the phone's system fonts (Noto Sans Sinhala / Tamil on current Android, since the Inter and Manrope fonts have no such letters). Check a real low-end phone: very old Android versions without those system fonts would show empty boxes, and bundling Noto fonts as assets would be the fix.
+
+**Not translated yet (do these next, screen by screen):** post, chat, profile, admin and sign-in screens, the in-app guide/FAQ (`document_content.dart`), the tooltips and scan snackbars on the Matches tab, and **server-written text** — push notification titles/bodies and alert texts created in SQL (`create_notification(...)`) are English; translating them needs the recipient's language stored on their profile and the SQL to pick the text from it.
 
 ## A7. Troubleshooting Gradle errors
 
@@ -1730,23 +1888,58 @@ auth.users`: `profiles.id references auth.users(id) on delete cascade`,
 so that would cascade-delete their profile and leave every *other*
 user's matches/chats/reports referencing that id pointing at nothing.
 
-Instead it, all in one `security definer` function:
+Instead it, all in one `security definer` function (redefined in
+`supabase/16_release_email_on_delete.sql`):
 1. Soft-deletes every item the account posted (same `items.deleted_at`
    flag as a regular per-item delete).
 2. Clears `profiles.full_name`/`username`/`avatar_url`/`phone`/
-   `fcm_token` and sets a new `profiles.deleted_at` — the row survives,
+   `fcm_token` (since migration 21, the person's `device_tokens` rows are deleted instead) and sets a new `profiles.deleted_at` — the row survives,
    but with nothing personal left on it. Existing chats/matches
    referencing this user now just show "Findora user" wherever a name
    would have appeared, via the `coalesce(full_name, username, 'Findora
    user')` fallback already used in `my_contact_threads()` and similar.
-3. Sets `auth.users.banned_until` to 100 years out — the same column the
-   Admin API's "ban user" endpoint sets, reachable directly here because
-   `security definer` runs as the function's *owner* (the `postgres`
-   role, in a normal SQL-Editor-run migration), which has full access to
-   the `auth` schema — no service-role key or Edge Function needed, only
+3. **Anonymises the `auth.users` row** (`release_account_identity()`):
+   the email becomes a unique placeholder
+   (`deleted-<id>@deleted.invalid`), the phone, password hash and user
+   metadata are cleared, linked identities (e.g. Google) and sessions
+   are deleted, and `banned_until` is set 100 years out so the husk can
+   never sign in. The row itself stays, because everything else points
+   at that id. This runs as the function's *owner* (the `postgres` role,
+   in a normal SQL-Editor-run migration), which has full access to the
+   `auth` schema — no service-role key or Edge Function needed, only
    `security definer` plus deriving the target strictly from `auth.uid()`
-   (never a parameter, so there's no "ban someone else" version of this
-   to accidentally expose).
+   (never a parameter, so there's no "delete someone else" version of
+   this to accidentally expose). Writing to the `auth` schema directly
+   isn't an officially supported interface, so re-test account deletion
+   after a Supabase platform upgrade.
+
+**Can the same email sign up again?** Yes — because step 3 freed it, a
+sign-up with that address creates a brand-new account (new id, new
+profile, no items/ratings/chats). The old history stays attached to the
+old id as "Findora user". Two guards:
+- **Cooldown.** For `email_reuse_cooldown()` (14 days; edit the number in
+  `16_release_email_on_delete.sql` and re-run it) after deletion, the
+  address can't be used to sign up, so deleting and re-registering can't
+  wipe a bad rating. Only a SHA-256 fingerprint of the address is kept
+  (`email_reuse_blocks`, no API access, expired rows cleaned up).
+  Enforced by the `a_enforce_email_reuse_block` trigger on `auth.users`
+  (covers every sign-up method); the sign-up screen first asks
+  `signup_email_status()` so it can say *when* the email is available
+  again instead of Supabase's generic "Database error saving new user".
+  It fails open if that check can't be made.
+- **Moderation blocks.** `select public.block_email('x@y.com');`
+  blocks an address permanently (or `, 90` for 90 days) — for people you
+  removed, as opposed to people who deleted themselves.
+
+Known limit: the fingerprint is of the exact address, so
+`name+1@gmail.com` is a different address to it — the cooldown deters
+casual reputation-resetting, it isn't identity checking. Also,
+`signup_email_status()` is callable signed-out and so reveals whether an
+address is currently blocked (and nothing about any other address).
+
+Accounts deleted *before* migration 16 are anonymised by a one-off
+backfill at the end of that file (`release_previously_deleted_emails()`),
+counting their cooldown from when they were actually deleted.
 
 The Flutter side calls `supabase.auth.signOut()` immediately after the
 RPC returns — banning blocks *future* sign-ins/token refreshes, but
@@ -1924,3 +2117,48 @@ web/
   auth-callback.html   email confirmation landing page (mobile handoff /
                        desktop auto-close) — see "Email confirmation flow"
 ```
+
+## Android hardening (manual steps)
+
+`android/app/src/main/AndroidManifest.xml` is git-ignored here (it carries
+the Maps API key), so it isn't overwritten by updates. Make these edits in
+your copy:
+
+1. On the `<application ...>` element add `android:allowBackup="false"`.
+   The Supabase session is stored in SharedPreferences, which Android
+   otherwise includes in cloud/ADB backups.
+2. Delete `<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />`.
+   `image_picker` uses the system photo picker, which needs no storage
+   permission, and Google Play reviews this permission closely.
+3. (Recommended) Stop keeping the key in the manifest. In the manifest use
+   `android:value="${mapsApiKey}"`, add `MAPS_API_KEY=your-key` to
+   `android/local.properties` (already ignored), and in
+   `android/app/build.gradle.kts` inside `defaultConfig { ... }` add:
+   ```kotlin
+   val localProps = java.util.Properties().apply {
+       val f = rootProject.file("local.properties")
+       if (f.exists()) f.inputStream().use { load(it) }
+   }
+   manifestPlaceholders["mapsApiKey"] = localProps.getProperty("MAPS_API_KEY") ?: ""
+   ```
+   Then the manifest can be committed. Also restrict the key in Google Cloud
+   Console to your package name + SHA-1 and the Maps SDK for Android.
+
+## Adding crash reporting (not done here — needs native setup)
+
+Firebase is already in the project, so Crashlytics is the shortest path:
+add `firebase_crashlytics` to `pubspec.yaml`, add the
+`com.google.firebase.crashlytics` Gradle plugin in `android/` (see the
+FlutterFire docs), then in `main()` after `Firebase.initializeApp`:
+
+```dart
+FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+PlatformDispatcher.instance.onError = (error, stack) {
+  FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+  return true;
+};
+```
+
+Mention it in the privacy policy / Play Data Safety form (crash logs and
+device identifiers are collected). It isn't wired in automatically because
+it changes what the app collects, which is your call.
