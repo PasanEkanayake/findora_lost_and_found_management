@@ -1,0 +1,50 @@
+name: CI
+
+# Runs on every push and pull request: static analysis, then the tests.
+# (Building the APK isn't included on purpose — it needs your Firebase and
+# Maps configuration, which live outside the repository.)
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # main.dart / pubspec reference .env as an asset; CI has no secrets, so
+      # an empty stand-in lets the project resolve and the pure tests run.
+      - name: Create stand-in .env
+        run: touch .env
+
+      - run: flutter pub get
+
+      # --no-fatal-infos: style hints (infos) are listed but don't fail the build;
+      # warnings and errors still do.
+      - name: Static analysis
+        run: flutter analyze --no-fatal-infos
+
+      - name: Tests
+        run: flutter test
+
+  ai-service-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai_service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The tests need only the standard library (a tiny stand-in replaces
+      # FastAPI when it isn't installed), so no requirements are installed.
+      - run: python -m unittest test_security -v
