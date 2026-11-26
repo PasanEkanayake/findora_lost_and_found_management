@@ -23,6 +23,11 @@ and this folder's README ("Two install tiers"). Without it, /embed/text
 responds with a clear 501 instead of crashing the whole service on
 startup.
 
+Security: every /embed call needs the caller's Supabase sign-in token and is
+rate limited per person (see security.py for the environment variables to set —
+SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are REQUIRED unless AI_SERVICE_AUTH=off,
+which is for local development only).
+
 Deploy: any container host works (Render, Railway, Fly.io, Cloud Run) —
 see README.md in this folder for the walkthrough and for wiring the
 deployed URL into the Flutter app via AUTH_CALLBACK_URL's sibling env var,
@@ -51,11 +56,12 @@ import os
 # env or the container's env before launch.
 os.environ.setdefault("USE_TF", "0")
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import text_pipeline
+from security import require_user
 
 # image_pipeline imports tensorflow + cv2, both only in
 # requirements-image.txt (not requirements.txt). Importing it
@@ -75,23 +81,27 @@ except ImportError as exc:  # pragma: no cover - exercised by missing-deps setup
 
 app = FastAPI(title="Findora AI Matching Service", version="1.0.0")
 
-# Wide open on purpose: every request here is either an item's own
-# title/description (about to be public in the feed anyway) or an item
-# photo, and the only client calling this is Findora itself — there's no
-# session/auth data in play for a browser-based (Flutter web) build to
-# leak cross-origin. Tighten this to your deployed app's origin(s) if
-# you'd rather be explicit.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS: the Android app is not a browser and needs none of this. Browsers are
+# only let in from origins you list explicitly (CORS_ORIGINS, comma separated —
+# e.g. a Flutter web build). Default: none.
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
+# Largest photo accepted by /embed/image.
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 class EmbedTextRequest(BaseModel):
-    title: str
-    description: str = ""
+    # Same limits as the database (items.title <= 120, description <= 2000),
+    # with a little headroom.
+    title: str = Field(max_length=200)
+    description: str = Field(default="", max_length=4000)
 
 
 class EmbedTextResponse(BaseModel):
@@ -108,7 +118,9 @@ def health() -> dict[str, object]:
 
 
 @app.post("/embed/text", response_model=EmbedTextResponse)
-def embed_text(payload: EmbedTextRequest) -> EmbedTextResponse:
+def embed_text(
+    payload: EmbedTextRequest, _user: str = Depends(require_user)
+) -> EmbedTextResponse:
     if not payload.title.strip() and not payload.description.strip():
         raise HTTPException(400, "title or description is required")
     embedding = text_pipeline.embed_item_text(payload.title, payload.description)
@@ -116,7 +128,9 @@ def embed_text(payload: EmbedTextRequest) -> EmbedTextResponse:
 
 
 @app.post("/embed/image", response_model=EmbedImageResponse)
-async def embed_image(file: UploadFile = File(...)) -> EmbedImageResponse:
+async def embed_image(
+    file: UploadFile = File(...), _user: str = Depends(require_user)
+) -> EmbedImageResponse:
     if image_pipeline is None:
         raise HTTPException(
             501,
@@ -124,7 +138,11 @@ async def embed_image(file: UploadFile = File(...)) -> EmbedImageResponse:
             "requirements-image.txt (adds TensorFlow + OpenCV) and restart "
             f"the service. Import error was: {_image_pipeline_import_error}",
         )
-    image_bytes = await file.read()
+    # Read one byte past the cap so an oversized upload is detected without
+    # ever holding more than MAX_IMAGE_BYTES + 1 in memory.
+    image_bytes = await file.read(MAX_IMAGE_BYTES + 1)
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "photo is too large (10 MB maximum)")
     if not image_bytes:
         raise HTTPException(400, "empty file")
     try:
