@@ -28,6 +28,11 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Host of the share-a-post links this app opens (the https intent filter in
+        // AndroidManifest.xml). Set `findora.shareHost=share.example.com` in
+        // android/gradle.properties; until then a placeholder that matches nothing.
+        manifestPlaceholders["shareHost"] =
+            (project.findProperty("findora.shareHost") as String?) ?: "share.findora.invalid"
     }
 
     buildTypes {
