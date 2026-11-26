@@ -1,6 +1,6 @@
 # Findora — Privacy policy
 
-Last updated: 28 September 2026
+Last updated: 20 October 2026
 
 ## Contents
 
@@ -21,11 +21,11 @@ Findora exists to reunite people with their belongings. To do that, it needs som
 
 - We **don't sell** your personal information and we **don't show ads**.
 - The photos you post are analysed **on your phone**. Only a set of numbers describing the photo is uploaded, together with the photo itself.
-- Other signed-in users can see your **open posts**, including the map pin you choose. They cannot see your email address.
+- Other signed-in users can see your **open posts**, including an **approximate area** (about 500 m across) around the location you choose. They never see the exact spot, and they cannot see your email address.
 - Once an item is **returned**, both posts are hidden from everyone except the two people involved.
 - You can **edit** your data in the app and **delete your account** at any time.
 
-Last updated: 28 September 2026
+Last updated: 20 October 2026
 
 ## 2. Information we collect
 
@@ -35,7 +35,11 @@ Your name, email address and password (or the name and email from Google if you 
 
 ### Posts
 
-For each lost or found post: title, description, category, type (lost or found), photos, the location you choose (coordinates and a text label), when it happened, and its status.
+For each lost or found post: title, description, category, type (lost or found), photos, the location you choose (the exact point, which only you can see, plus an approximate point and a neighbourhood or town name that other people see), when it happened, and its status. Posts expire 60 days after they were posted unless you renew them; an expired post is hidden from other people but stays in your **My posts**.
+
+### Photos
+
+Before a photo is uploaded, the app removes the hidden information cameras add to picture files (the place it was taken, the date, the phone's make and model). Photos you post are stored in a public storage area (see section 4); a small copy is also made on our servers to keep lists fast. Photos you send inside a conversation are stored privately and are readable only by the two people in it.
 
 ### Photo analysis data
 
@@ -47,7 +51,7 @@ Where the optional text-matching service is enabled, your post's title and descr
 
 ### Location
 
-If you allow it, your phone's location is used when you tap "use my location" and to show posts near you. We calculate distances between posts to score matches. We don't track your location in the background.
+If you allow it, your phone's location is used when you tap "use my location" and to show posts near you. We calculate distances between posts to score matches, using the approximate points, not the exact ones. We don't track your location in the background.
 
 ### Messages, claims and ratings
 
@@ -55,7 +59,7 @@ The messages you send, claim descriptions, and ratings and reviews you give or r
 
 ### Reports and moderation
 
-If you report a post, we store the report, its reason and who made it.
+If you report a post, we store the report, its reason and who made it. If several different people report the same post it is hidden automatically until a moderator reviews it. Moderation decisions (a post hidden, removed or restored, a report reviewed, an appeal sent or decided) are recorded in a log that only moderators can read, with who acted and when; if you appeal, your message and the moderator's reason are stored with it. The log can't be edited.
 
 ### Device and notification data
 
@@ -75,7 +79,8 @@ We do not use your data to build advertising profiles, and we do not sell it.
 
 ## 4. Who can see what
 
-- **Open posts** (title, description, photos, category, location pin, time, your display name and profile photo): visible to other signed-in users.
+- **Open posts** (title, description, photos, category, approximate location area, time, your display name and profile photo): visible to other signed-in users. The exact spot you pinned is visible to you only.
+- **A post's share link**: if you share a post (the share icon), anyone who has the link can see a small preview without signing in — its type, title, neighbourhood or town name and a thumbnail. Nothing else (no description, name or location) is included. The preview disappears when the post is no longer open.
 - **Your email address**: not shown to other users.
 - **Your phone number**: visible in your own profile only.
 - **Messages and claim text**: visible to the participants of that conversation.
@@ -83,7 +88,7 @@ We do not use your data to build advertising profiles, and we do not sell it.
 - **Returned posts**: visible only to the two owners, in Profile → Returned items. Moderators can see posts when they need to review a report.
 - **Reports you file**: visible to moderators.
 
-> **Important:** Photos are stored in a storage area that can be opened by anyone who has the exact link. The links are long, random and not listed anywhere, but if you share one, or someone you sent a photo to shares it, it can be opened. Don't post photos you wouldn't want seen.
+> **Important:** Photos of posts and profile photos are stored in a storage area that can be opened by anyone who has the exact link. The links are long and random, and the storage area can only be browsed by each person for their own files, but if you share one, or someone you sent a photo to shares it, it can be opened. Don't post photos you wouldn't want seen.
 
 > **Important:** Messages are encrypted in transit but are not end-to-end encrypted. Don't send sensitive information.
 
@@ -92,17 +97,18 @@ We do not use your data to build advertising profiles, and we do not sell it.
 We use service providers to run Findora. They process data on our behalf and only for that purpose:
 
 - **Supabase**: database, sign-in, file storage and live updates.
-- **Google**: map display, Google sign-in if you choose it, and Firebase Cloud Messaging for push notifications (which receives your device token). Your phone's built-in address lookup may also be provided by Google.
+- **Google**: map display, Google sign-in if you choose it, and Firebase Cloud Messaging for push notifications (which receives your device token and the notification text, which can include the title of a post). Your phone's built-in address lookup may also be provided by Google.
 - **Our text-analysis host**: receives post text when text matching is enabled.
 
 We may disclose information if the law requires it, to protect people's safety, or to enforce our rules. If Findora is ever transferred to another organisation, your information may transfer with it and this policy would continue to apply.
 
 ## 6. Keeping and deleting your data
 
-- **Delete a post**: it is hidden from everyone immediately. For safety and recovery it is kept in our systems, out of sight, rather than erased. Email support@findora.app if you need a post fully removed.
-- **Delete your account** (Profile → Delete account): your name, photo, phone number and notification token are removed from your profile, your posts are hidden, and you can't sign in again.
+- **Delete a post**: it is hidden from everyone immediately. For safety and recovery it is kept in our systems, out of sight, rather than erased — **including its photos, which stay in storage and can still be opened by anyone who already has a photo's exact link**. Email support@findora.app if you need a post and its photos fully removed.
+- **Delete your account** (Profile → Delete account): your name, photo, phone number and notification token are removed from your profile, your posts are hidden, and you can't sign in again. The photo files you uploaded are not yet erased from storage automatically; email support@findora.app and we will remove them.
 - **What remains**: conversations you had with other people remain visible to them (showing your name as "Findora user"), and ratings you gave or received are kept so other people's ratings stay accurate.
 - **Returned posts** are kept so the two people involved keep their history.
+- **Your language choice** is stored on your phone only.
 
 To ask for a copy of your data, or for anything that isn't covered by the in-app options, email support@findora.app.
 
