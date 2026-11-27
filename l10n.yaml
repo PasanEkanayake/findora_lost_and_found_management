@@ -1,0 +1,9 @@
+# Flutter's gen-l10n settings. `flutter pub get` (and `flutter run`/`test`/
+# `build`) generate lib/l10n/app_localizations*.dart from the .arb files here —
+# those generated files are not committed (see .gitignore). See README.md,
+# "Languages (English, Sinhala, Tamil)".
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+output-dir: lib/l10n
+nullable-getter: false
