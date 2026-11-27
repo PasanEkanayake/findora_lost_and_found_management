@@ -1,0 +1,232 @@
+{
+  "@@locale": "en",
+  "languageTitle": "Language",
+  "@languageTitle": {
+    "description": "Title of the language setting (Profile) and of its picker dialog."
+  },
+  "languageSystemDefault": "System default",
+  "@languageSystemDefault": {
+    "description": "Language choice meaning \"use the phone's language\"."
+  },
+  "commonShowMore": "Show more",
+  "@commonShowMore": {
+    "description": "Button under a list that loads more rows."
+  },
+  "commonUndo": "Undo",
+  "@commonUndo": {
+    "description": "Button that takes back the last action."
+  },
+  "navBrowse": "Browse",
+  "@navBrowse": {
+    "description": "Bottom navigation tab: the feed of posts."
+  },
+  "navMatches": "Matches",
+  "@navMatches": {
+    "description": "Bottom navigation tab: possible matches."
+  },
+  "navChats": "Chats",
+  "@navChats": {
+    "description": "Bottom navigation tab: conversations."
+  },
+  "navAlerts": "Alerts",
+  "@navAlerts": {
+    "description": "Bottom navigation tab: notifications."
+  },
+  "navProfile": "Profile",
+  "@navProfile": {
+    "description": "Bottom navigation tab: the person's profile and settings."
+  },
+  "reportItemButton": "Report item",
+  "@reportItemButton": {
+    "description": "Floating button that starts a new lost/found post."
+  },
+  "offlineBanner": "You''re offline — showing what''s already loaded",
+  "@offlineBanner": {
+    "description": "Banner shown at the top while the phone can't reach the server."
+  },
+  "backOnline": "Back online",
+  "@backOnline": {
+    "description": "Brief green banner when the connection returns."
+  },
+  "matchesTitle": "Matches for you",
+  "@matchesTitle": {
+    "description": "App bar title of the Matches tab."
+  },
+  "matchesSectionNeedsInput": "Needs your input",
+  "@matchesSectionNeedsInput": {
+    "description": "Section heading: matches the person hasn't decided on."
+  },
+  "matchesSectionWaiting": "Waiting for the other person",
+  "@matchesSectionWaiting": {
+    "description": "Section heading: matches the person confirmed, waiting for the other person."
+  },
+  "matchesSectionDecided": "Already decided",
+  "@matchesSectionDecided": {
+    "description": "Section heading: matches that are confirmed by both or dismissed."
+  },
+  "matchesEmptyTitle": "No matches yet",
+  "@matchesEmptyTitle": {
+    "description": "Empty state of the Matches tab: title."
+  },
+  "matchesEmptyBody": "Once you report a lost or found item, our on-device AI compares its photo against everyone else''s to look for a possible match — they''ll show up here automatically. Posted before? Tap the scan icon (top right) to re-check your photos.",
+  "@matchesEmptyBody": {
+    "description": "Empty state of the Matches tab: explanation."
+  },
+  "matchesFilteredEmptyTitle": "No matches with this filter",
+  "@matchesFilteredEmptyTitle": {
+    "description": "Shown when a filter chip leaves no matches: title."
+  },
+  "matchesFilteredEmptyBody": "Try a different filter, or \"All\" to see every match again.",
+  "@matchesFilteredEmptyBody": {
+    "description": "Shown when a filter chip leaves no matches: hint."
+  },
+  "matchesLoadErrorTitle": "Couldn''t load matches",
+  "@matchesLoadErrorTitle": {
+    "description": "Matches tab could not load: title."
+  },
+  "matchesLoadErrorBody": "Check your connection and pull down to try again.",
+  "@matchesLoadErrorBody": {
+    "description": "Matches tab could not load: hint."
+  },
+  "matchFilterAll": "All",
+  "@matchFilterAll": {
+    "description": "Filter chip: every match."
+  },
+  "matchFilterImageOnly": "📷 Image only",
+  "@matchFilterImageOnly": {
+    "description": "Filter chip: matches found by photo similarity only. Keep the emoji."
+  },
+  "matchFilterTextOnly": "📝 Text only",
+  "@matchFilterTextOnly": {
+    "description": "Filter chip: matches found by wording similarity only. Keep the emoji."
+  },
+  "matchFilterBoth": "📷📝 Both",
+  "@matchFilterBoth": {
+    "description": "Filter chip: matches found by both photo and wording. Keep the emojis."
+  },
+  "matchFilterNearby": "📍 Nearby",
+  "@matchFilterNearby": {
+    "description": "Filter chip: matches close by. Keep the emoji."
+  },
+  "matchFilterSimilarTime": "🕐 Similar time",
+  "@matchFilterSimilarTime": {
+    "description": "Filter chip: matches from a similar time. Keep the emoji."
+  },
+  "matchCardYourItem": "YOUR ITEM",
+  "@matchCardYourItem": {
+    "description": "Caption above the person's own item on a match card (upper case)."
+  },
+  "matchCardPossibleMatch": "POSSIBLE MATCH",
+  "@matchCardPossibleMatch": {
+    "description": "Caption above the other person's item on a match card (upper case)."
+  },
+  "matchCardTapHint": "Tap either item to view its post.",
+  "@matchCardTapHint": {
+    "description": "Hint under a match card."
+  },
+  "matchActionThisIsIt": "This is it!",
+  "@matchActionThisIsIt": {
+    "description": "Button: confirm that this is a match."
+  },
+  "matchActionNotAMatch": "Not a match",
+  "@matchActionNotAMatch": {
+    "description": "Button: dismiss the match."
+  },
+  "matchActionMessage": "Message",
+  "@matchActionMessage": {
+    "description": "Button: open the chat for a confirmed match."
+  },
+  "matchActionUndoMyConfirmation": "Undo my confirmation",
+  "@matchActionUndoMyConfirmation": {
+    "description": "Button: take back the person's own confirmation."
+  },
+  "matchStatusDismissed": "Dismissed",
+  "@matchStatusDismissed": {
+    "description": "Label on a dismissed match."
+  },
+  "matchNoteOtherConfirmedFirst": "The other person says this is a match. Confirm too to start chatting.",
+  "@matchNoteOtherConfirmedFirst": {
+    "description": "Note on a match card when the other person already confirmed."
+  },
+  "matchNoteYouConfirmed": "You confirmed. The chat opens once the other person confirms too.",
+  "@matchNoteYouConfirmed": {
+    "description": "Note on a match card after the person confirmed."
+  },
+  "matchSnackMutual": "It''s mutual — you can message each other now.",
+  "@matchSnackMutual": {
+    "description": "Snackbar: both people confirmed."
+  },
+  "matchSnackConfirmedWaiting": "Confirmed. The chat opens once the other person confirms too.",
+  "@matchSnackConfirmedWaiting": {
+    "description": "Snackbar: the person confirmed, the other hasn't yet."
+  },
+  "matchSnackPassedAlready": "The other person has already passed on this match.",
+  "@matchSnackPassedAlready": {
+    "description": "Snackbar: the other person dismissed the match first."
+  },
+  "matchSnackMarkedNotMatch": "Marked as not a match.",
+  "@matchSnackMarkedNotMatch": {
+    "description": "Snackbar after dismissing a match."
+  },
+  "matchSnackUpdateFailed": "Couldn''t update this match. Try again.",
+  "@matchSnackUpdateFailed": {
+    "description": "Snackbar: the decision couldn't be saved."
+  },
+  "matchSnackUndoFailed": "Couldn''t undo that. Try again.",
+  "@matchSnackUndoFailed": {
+    "description": "Snackbar: undo failed."
+  },
+  "matchSnackClaimFiled": "A claim has already been filed for this match, so it can no longer be undone.",
+  "@matchSnackClaimFiled": {
+    "description": "Snackbar: a claim exists so a confirmation can't be undone."
+  },
+  "matchSnackUndoneStaysDismissed": "Undone on your side — the match stays dismissed because the other person passed on it too.",
+  "@matchSnackUndoneStaysDismissed": {
+    "description": "Snackbar: undone, but the other person had also dismissed it."
+  },
+  "matchSnackUndoneBack": "Undone — this match is back under \"Needs your input\".",
+  "@matchSnackUndoneBack": {
+    "description": "Snackbar: undone, the match is open again."
+  },
+  "matchUndoDialogTitle": "Undo your confirmation?",
+  "@matchUndoDialogTitle": {
+    "description": "Dialog title: undo a mutual confirmation."
+  },
+  "matchUndoDialogBody": "The chat for this match will be hidden for both of you, and the match goes back to \"Needs your input\". Your messages are kept — confirming again brings the chat back.",
+  "@matchUndoDialogBody": {
+    "description": "Dialog text: what undoing a mutual confirmation does."
+  },
+  "expiryExpired": "This post has expired. Other people can no longer see it, and it is not being matched. Renew it if you are still looking.",
+  "@expiryExpired": {
+    "description": "Banner on the owner's expired post."
+  },
+  "expiryExpiringDays": "{count, plural, =0{Still looking? This post expires within a day.} =1{Still looking? This post expires within a day.} other{Still looking? This post expires in {count} days.}}",
+  "@expiryExpiringDays": {
+    "description": "Banner on the owner's post that is about to expire ({count} = whole days left).",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "expiryKeepItUp": "Keep it up",
+  "@expiryKeepItUp": {
+    "description": "Button: keep a post that is about to expire."
+  },
+  "expiryRenew": "Renew",
+  "@expiryRenew": {
+    "description": "Button: renew an expired post."
+  },
+  "expiryRenewedBack": "Your post is back up for another 60 days.",
+  "@expiryRenewedBack": {
+    "description": "Snackbar after renewing an expired post."
+  },
+  "expiryKeptUp": "Kept up — it''ll stay for another 60 days.",
+  "@expiryKeptUp": {
+    "description": "Snackbar after keeping a post up."
+  },
+  "expiryRenewFailed": "Couldn''t renew this post. Try again.",
+  "@expiryRenewFailed": {
+    "description": "Snackbar: renewing failed."
+  }
+}
